@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '@/store'
 import { getConnectionId } from '@/lib/connection-context'
 import { getRepoOwnerRoutedSettings } from '@/lib/repo-runtime-owner'
+import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import type { Repo, Worktree } from '../../../../shared/types'
 import { refreshGitStatusForWorktree } from '../right-sidebar/git-status-refresh'
@@ -133,8 +134,9 @@ export function useSidebarChangeCountPoll({ enabled }: { enabled: boolean }): vo
 
     const sweep = async (): Promise<void> => {
       // Why: a sweep slower than the interval must not stack another one on top
-      // and double every workspace's Git load.
-      if (sweepInFlight || document.hidden || controller.signal.aborted) {
+      // and double every workspace's Git load. Window visibility is the
+      // interval's business, not this function's.
+      if (sweepInFlight || controller.signal.aborted) {
         return
       }
       sweepInFlight = true
@@ -154,21 +156,17 @@ export function useSidebarChangeCountPoll({ enabled }: { enabled: boolean }): vo
       }
     }
 
-    void sweep()
-    const timer = setInterval(() => void sweep(), SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS)
-    // Why: a hidden window skips sweeps, so returning to the app refreshes at
-    // once instead of waiting out the remainder of the interval.
-    const onVisibilityChange = (): void => {
-      if (!document.hidden) {
-        void sweep()
-      }
-    }
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    // Sweeps immediately, pauses while the window is hidden, and catches up as
+    // soon as it is visible again -- a hidden window drops signals, so the
+    // becoming-visible run is evidence-bearing rather than a bare tick.
+    const uninstallInterval = installWindowVisibilityInterval({
+      run: () => void sweep(),
+      intervalMs: SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS
+    })
 
     return () => {
       controller.abort()
-      clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      uninstallInterval()
     }
   }, [enabled])
 }

@@ -119,7 +119,7 @@ beforeEach(() => {
     setUpstreamStatus,
     fetchUpstreamStatus
   }
-  Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
 })
 
 afterEach(async () => {
@@ -202,7 +202,7 @@ describe('useSidebarChangeCountPoll', () => {
   })
 
   it('skips the sweep while the window is hidden', async () => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
 
     await mount()
 
@@ -210,11 +210,11 @@ describe('useSidebarChangeCountPoll', () => {
   })
 
   it('sweeps immediately when the window becomes visible again', async () => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
     await mount()
     expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
 
-    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
