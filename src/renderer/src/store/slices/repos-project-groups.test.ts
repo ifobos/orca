@@ -749,7 +749,8 @@ describe('project group store routing', () => {
     expect(projectGroupsScanNested).toHaveBeenCalledWith({
       path: '/platform',
       connectionId: undefined,
-      scanId: 'scan-1'
+      scanId: 'scan-1',
+      options: { includeReposInsideGitRepos: false }
     })
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
@@ -827,8 +828,9 @@ describe('project group store routing', () => {
     expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
       selector: 'env-selected',
       method: 'projectGroup.scanNested',
-      params: { path: '/platform' },
-      timeoutMs: 20_000
+      params: { path: '/platform', includeReposInsideGitRepos: false },
+      timeoutMs: 20_000,
+      expectedEnvironmentPairingRevision: undefined
     })
   })
 

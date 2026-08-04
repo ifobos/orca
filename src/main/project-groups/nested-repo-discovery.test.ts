@@ -302,6 +302,51 @@ describe('scanNestedRepos', () => {
     expect(result.repos.map((repo) => repo.path)).toEqual(['/workspace/active/repo'])
   })
 
+  it('discovers gitignored nested repos when repos-inside-repos is on', async () => {
+    const directories = new Map([
+      ['/workspace', ['.gitignore', 'api', 'poc', 'node_modules']],
+      ['/workspace/api', ['nested']],
+      // Why: the real shape — an ignored plain folder holding an ignored clone.
+      ['/workspace/poc', ['experiment']],
+      ['/workspace/node_modules', ['dep-clone']]
+    ])
+    const files = new Map([['/workspace/.gitignore', 'api/\npoc/\n']])
+    const gitRepos = new Set([
+      '/workspace',
+      '/workspace/api',
+      '/workspace/api/nested',
+      '/workspace/poc/experiment',
+      '/workspace/node_modules/dep-clone'
+    ])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos, files })
+    })
+
+    // node_modules stays pruned: SKIPPED_DIRS is independent of gitignore.
+    expect(result.repos.map((repo) => repo.path)).toEqual([
+      '/workspace',
+      '/workspace/api',
+      '/workspace/api/nested',
+      '/workspace/poc/experiment'
+    ])
+  })
+
+  it('bounds a repos-inside-repos scan with a default timeout', async () => {
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({
+        directories: new Map([['/workspace', []]]),
+        gitRepos: new Set(['/workspace'])
+      })
+    })
+
+    expect(result.timeoutMs).toBe(10_000)
+  })
+
   it('keeps root-anchored gitignore rules scoped to their base directory', async () => {
     const directories = new Map([
       ['/workspace', ['.gitignore', 'active', 'ignored']],

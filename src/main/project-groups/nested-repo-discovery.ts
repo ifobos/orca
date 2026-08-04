@@ -62,8 +62,15 @@ const SKIPPED_DIRS = new Set([
 
 const VCS_METADATA_DIRS = new Set(['.git', '.svn', '.hg', '.jj', '.sl', '.repo', 'CVS'])
 
+// Why: repos-inside-repos drops gitignore pruning, so it needs a wall clock of
+// its own — the local add path sends no timeout and would otherwise be unbounded.
+const REPOS_INSIDE_REPOS_TIMEOUT_MS = 10_000
+
 function normalizeScanOptions(options: unknown): NormalizedNestedRepoScanOptions {
   const raw = options && typeof options === 'object' ? (options as NestedRepoScanOptions) : {}
+  if (raw.includeReposInsideGitRepos === true && raw.timeoutMs === undefined) {
+    return normalizeScanOptions({ ...raw, timeoutMs: REPOS_INSIDE_REPOS_TIMEOUT_MS })
+  }
   return {
     maxDepth:
       typeof raw.maxDepth === 'number' && Number.isFinite(raw.maxDepth)
@@ -143,7 +150,7 @@ function parseGitignoreRules(content: string, baseSegments: string[]): IgnoreRul
     .filter((rule) => rule.pattern.length > 0)
 }
 
-function isIgnoredByRules(name: string, segments: string[], rules: IgnoreRule[]): boolean {
+function matchesIgnoreRules(segments: string[], rules: IgnoreRule[]): boolean {
   let ignored = false
   for (const rule of rules) {
     if (segments.length <= rule.baseSegments.length) {
@@ -158,7 +165,7 @@ function isIgnoredByRules(name: string, segments: string[], rules: IgnoreRule[])
       ignored = !rule.negate
     }
   }
-  return ignored || shouldSkipDirectory(name, segments.length - 1)
+  return ignored
 }
 
 async function readGitignoreRules(args: {
@@ -311,15 +318,20 @@ export async function scanNestedRepos(args: {
     if (noteAbort()) {
       break
     }
-    const currentIgnoreRules = [
-      ...currentFolder.ignoreRules,
-      ...(await readGitignoreRules({
-        folderPath: currentFolder.path,
-        entries,
-        filesystem,
-        baseSegments: currentFolder.segments
-      }))
-    ]
+    // Why: a parent repo holds independent clones by gitignoring them, so for
+    // repos-inside-repos the ignore file points at the very repos being looked
+    // for. SKIPPED_DIRS, maxDepth, maxRepos and the timeout bound the cost.
+    const currentIgnoreRules = options.includeReposInsideGitRepos
+      ? []
+      : [
+          ...currentFolder.ignoreRules,
+          ...(await readGitignoreRules({
+            folderPath: currentFolder.path,
+            entries,
+            filesystem,
+            baseSegments: currentFolder.segments
+          }))
+        ]
 
     const dirs = entries
       .filter((entry) => entry.isDirectory && !entry.isSymlink)
@@ -338,7 +350,10 @@ export async function scanNestedRepos(args: {
         break
       }
       const childSegments = [...currentFolder.segments, name]
-      if (isIgnoredByRules(name, childSegments, currentIgnoreRules)) {
+      if (shouldSkipDirectory(name, childSegments.length - 1)) {
+        continue
+      }
+      if (matchesIgnoreRules(childSegments, currentIgnoreRules)) {
         continue
       }
       const childPath = filesystem.joinPath(currentFolder.path, name)
