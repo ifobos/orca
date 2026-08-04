@@ -5100,6 +5100,18 @@
           "3b7ea51793": "Borrar búsqueda",
           "7f1c2e94a5": "El texto de búsqueda es demasiado largo: el tablero no está filtrado",
           "9a4d0f6b21": "Demasiado largo"
+        },
+        "WorktreeCardChangeCountBadge": {
+          "oneUncommittedChange": "1 cambio sin confirmar",
+          "uncommittedChanges": "{{value0}} cambios sin confirmar"
+        },
+        "WorktreeCardChangeCountDetails": {
+          "heading": "Cambios sin confirmar",
+          "staged": "{{value0}} preparados",
+          "unstaged": "{{value0}} sin preparar",
+          "untracked": "{{value0}} sin seguimiento",
+          "oneSubmodule": "1 submódulo",
+          "submodules": "{{value0}} submódulos"
         }
       },
       "shared": {

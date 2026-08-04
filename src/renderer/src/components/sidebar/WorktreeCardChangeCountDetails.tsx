@@ -1,0 +1,99 @@
+import React from 'react'
+import { FileDiff } from 'lucide-react'
+import type { GitStatusEntry } from '../../../../shared/git-status-types'
+import { translate } from '@/i18n/i18n'
+import {
+  WorktreeCardDetailSection,
+  WorktreeCardDetailSectionContent
+} from './WorktreeCardDetailSection'
+import { summarizeWorktreeChanges } from './worktree-change-summary'
+import { useAppStore } from '@/store'
+
+function buildBreakdown(entries: readonly GitStatusEntry[]): string[] {
+  const summary = summarizeWorktreeChanges(entries)
+  const parts: string[] = []
+  if (summary.staged > 0) {
+    parts.push(
+      translate(
+        'auto.components.sidebar.WorktreeCardChangeCountDetails.staged',
+        '{{value0}} staged',
+        {
+          value0: summary.staged
+        }
+      )
+    )
+  }
+  if (summary.unstaged > 0) {
+    parts.push(
+      translate(
+        'auto.components.sidebar.WorktreeCardChangeCountDetails.unstaged',
+        '{{value0}} unstaged',
+        { value0: summary.unstaged }
+      )
+    )
+  }
+  if (summary.untracked > 0) {
+    parts.push(
+      translate(
+        'auto.components.sidebar.WorktreeCardChangeCountDetails.untracked',
+        '{{value0}} untracked',
+        { value0: summary.untracked }
+      )
+    )
+  }
+  if (summary.submodules > 0) {
+    // Why: this is the line that answers "why does the count exceed my own file
+    // edits?" — a dirty submodule is one change in the parent's working tree.
+    parts.push(
+      summary.submodules === 1
+        ? translate(
+            'auto.components.sidebar.WorktreeCardChangeCountDetails.oneSubmodule',
+            '1 submodule'
+          )
+        : translate(
+            'auto.components.sidebar.WorktreeCardChangeCountDetails.submodules',
+            '{{value0}} submodules',
+            { value0: summary.submodules }
+          )
+    )
+  }
+  return parts
+}
+
+/**
+ * Explains the row's change count inside the card hover: the total, then what it
+ * is made of. Renders nothing for a clean workspace, matching the row badge.
+ */
+export function WorktreeCardChangeCountDetails({
+  worktreeId
+}: {
+  worktreeId: string
+}): React.JSX.Element | null {
+  const entries = useAppStore(
+    (s) => s.gitStatusByWorktree?.[worktreeId] as GitStatusEntry[] | undefined
+  )
+  if (!entries || entries.length === 0) {
+    return null
+  }
+  const breakdown = buildBreakdown(entries)
+
+  return (
+    <WorktreeCardDetailSection>
+      <div className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+        <FileDiff className="size-3" />
+        <span>
+          {translate(
+            'auto.components.sidebar.WorktreeCardChangeCountDetails.heading',
+            'Uncommitted Changes'
+          )}{' '}
+          <span className="font-normal tabular-nums text-muted-foreground/70">
+            ({entries.length})
+          </span>
+        </span>
+      </div>
+      <WorktreeCardDetailSectionContent>
+        <p className="text-[11.5px] leading-snug text-muted-foreground">{breakdown.join(' · ')}</p>
+      </WorktreeCardDetailSectionContent>
+    </WorktreeCardDetailSection>
+  )
+}

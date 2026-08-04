@@ -5290,6 +5290,18 @@
           "89385db176": "Dismiss",
           "ca4a7892af": "Connecting...",
           "4afcca1d24": "Reconnect"
+        },
+        "WorktreeCardChangeCountBadge": {
+          "oneUncommittedChange": "1 uncommitted change",
+          "uncommittedChanges": "{{value0}} uncommitted changes"
+        },
+        "WorktreeCardChangeCountDetails": {
+          "heading": "Uncommitted Changes",
+          "staged": "{{value0}} staged",
+          "unstaged": "{{value0}} unstaged",
+          "untracked": "{{value0}} untracked",
+          "oneSubmodule": "1 submodule",
+          "submodules": "{{value0}} submodules"
         }
       },
       "shared": {
