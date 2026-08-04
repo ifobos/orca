@@ -206,6 +206,12 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
         await Promise.all(
           Array.from({ length: Math.min(MAX_CONCURRENT_SWEEP_REQUESTS, targets.length) }, worker)
         )
+      } catch {
+        // Why swallowed rather than propagated: every caller fires this as
+        // `void sweep()` from a timer, a filesystem event or an agent
+        // transition, so a throw here becomes an unhandled rejection instead of
+        // reaching anyone. A glanceable count is not worth that -- rows keep
+        // their previous numbers and the next sweep tries again.
       } finally {
         sweepInFlight = false
         // Why recorded here: the backoff below measures idle time from when work

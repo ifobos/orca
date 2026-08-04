@@ -49,11 +49,18 @@ vi.mock('@/lib/connection-context', () => ({
 // Why derived from the store by default: every existing case then keeps its
 // meaning, and only the tests that care about visibility set an override.
 let visibleIdsOverride: string[] | null = null
+let visibleIdsThrow: Error | null = null
 
 vi.mock('./visible-worktrees', () => ({
-  getVisibleWorktreeIds: () =>
-    visibleIdsOverride ??
-    Object.values(storeState.worktreesByRepo).flatMap((list) => (list ?? []).map((wt) => wt.id))
+  getVisibleWorktreeIds: () => {
+    if (visibleIdsThrow) {
+      throw visibleIdsThrow
+    }
+    return (
+      visibleIdsOverride ??
+      Object.values(storeState.worktreesByRepo).flatMap((list) => (list ?? []).map((wt) => wt.id))
+    )
+  }
 }))
 
 const { useSidebarChangeCountSync } = await import('./use-sidebar-change-count-sync')
@@ -138,6 +145,7 @@ beforeEach(() => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   fsListeners = []
   visibleIdsOverride = null
+  visibleIdsThrow = null
   ;(window as unknown as { api: unknown }).api = {
     fs: {
       onFsChanged: (callback: (payload: { worktreePath: string; events: unknown[] }) => void) => {
@@ -199,6 +207,54 @@ describe('useSidebarChangeCountSync', () => {
     await mount(false)
 
     expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
+  })
+
+  it('contains a throw instead of rejecting into nobody', async () => {
+    // Why on `process` and not `window`: the sweep is fired as `void sweep()`
+    // from the interval, filesystem events and agent transitions, so a throw
+    // rejects a promise no one holds and lands on the Node worker, not in the
+    // happy-dom window. That is how it showed up -- as two unhandled errors in
+    // Sidebar.test.tsx, whose partial store mock has no getState.
+    const rejections: unknown[] = []
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onRejection)
+    visibleIdsThrow = new Error('store shape surprised the sweep')
+
+    try {
+      await mount()
+      await act(async () => {
+        await Promise.resolve()
+      })
+      // Why an explicit turn of the microtask queue: Node reports an unhandled
+      // rejection only once nothing has attached a handler by the end of the
+      // tick, so asserting earlier would pass whether or not the catch exists.
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('unhandledRejection', onRejection)
+    }
+
+    expect(rejections).toEqual([])
+    expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
+  })
+
+  it('sweeps again after a throw rather than staying wedged', async () => {
+    // Why: the in-flight flag is cleared in a `finally`, so it survives the
+    // throw path. Moving that reset into the try -- or catching before it --
+    // would leave sweepInFlight true forever and silently drop every later
+    // event, which no other case here would notice.
+    visibleIdsThrow = new Error('transient')
+    await mount()
+    expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
+
+    visibleIdsThrow = null
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    expect(polledPaths()).toEqual(['/repos/git-1', '/repos/git-2'])
   })
 
   it('never routes a local workspace to the focused runtime', async () => {
