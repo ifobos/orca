@@ -115,7 +115,12 @@ describe('useAddRepoLocalFolderFlow', () => {
     expect(scanNestedRepos).toHaveBeenCalledWith(
       '/projects/alpha',
       undefined,
-      expect.objectContaining({ runtimeEnvironmentId: null })
+      // Why the flag matters here: a batch add cannot stop to show a review, so it
+      // deliberately keeps the cheap path. Nothing asserted that before.
+      expect.objectContaining({
+        runtimeEnvironmentId: null,
+        includeReposInsideGitRepos: false
+      })
     )
     expect(fetchWorktrees).toHaveBeenCalledWith('alpha', {
       requireAuthoritative: true,
@@ -127,6 +132,38 @@ describe('useAddRepoLocalFolderFlow', () => {
     })
     expect(onGitRepoReady).toHaveBeenCalledTimes(1)
     expect(onGitRepoReady).toHaveBeenCalledWith('alpha', 'local_folder_picker', 'local')
+  })
+
+  it('opts a single-folder add into the repos-inside-repos scan', async () => {
+    // Why: only this path can stop and show a review, so it is the only one that
+    // pays for looking inside a repo the user picked. Flipping the mode either way
+    // used to break nothing.
+    pickFolders.mockResolvedValue(['/projects/alpha'])
+    const { useAddRepoLocalFolderFlow } = await import('./useAddRepoLocalFolderFlow')
+
+    const { handleBrowse } = useAddRepoLocalFolderFlow({
+      isOpen: true,
+      droppedLocalPath: '',
+      activeRuntimeEnvironmentId: null,
+      addRepoPath,
+      closeModal,
+      fetchWorktrees,
+      scanNestedRepos,
+      setActiveNestedScanId,
+      setNestedScanInProgress,
+      showNestedRepoReview,
+      onGitRepoReady,
+      setIsAdding,
+      setAddProjectBusyLabel
+    })
+
+    await handleBrowse()
+
+    expect(scanNestedRepos).toHaveBeenCalledWith(
+      '/projects/alpha',
+      undefined,
+      expect.objectContaining({ includeReposInsideGitRepos: true })
+    )
   })
 
   it('skips nested-review folders in a multi-folder add and continues with git folders', async () => {

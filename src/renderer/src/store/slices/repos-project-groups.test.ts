@@ -755,6 +755,22 @@ describe('project group store routing', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
+  it('forwards the repos-inside-repos opt-in to the local scan', async () => {
+    // Why: every assertion on this flag used to check the `false` case, so
+    // hardcoding false here would have left the whole feature dead and green.
+    // The scan result is irrelevant here; only the forwarded options are.
+    projectGroupsScanNested.mockResolvedValue(null)
+    const store = createTestStore()
+
+    await store.getState().scanNestedRepos('/platform', undefined, {
+      includeReposInsideGitRepos: true
+    })
+
+    expect(projectGroupsScanNested).toHaveBeenCalledWith(
+      expect.objectContaining({ options: { includeReposInsideGitRepos: true } })
+    )
+  })
+
   it('unsubscribes local nested scan progress when the scan rejects', async () => {
     const unsubscribe = vi.fn()
     projectGroupsOnNestedScanProgress.mockReturnValue(unsubscribe)

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Repo, Worktree } from '../../../../shared/types'
 
 let gitStatusByWorktree: Record<string, unknown[]> = {}
+let settings: Record<string, unknown> | null = null
 const WORKTREE_CARD_IMPORT_TIMEOUT_MS = 15_000
 
 vi.mock('@/store', () => ({
@@ -21,7 +22,7 @@ vi.mock('@/store', () => ({
       openModal: vi.fn(),
       projectGroups: [],
       remoteBranchConflictByWorktreeId: {},
-      settings: null,
+      settings,
       sshConnectionStates: new Map(),
       sshTargetLabels: new Map(),
       updateWorktreeMeta: vi.fn(),
@@ -106,6 +107,7 @@ describe('WorktreeCard change count', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     gitStatusByWorktree = {}
+    settings = null
   })
 
   it(
@@ -130,6 +132,26 @@ describe('WorktreeCard change count', () => {
 
       expect(markup).not.toContain('data-worktree-change-count')
       expect(markup).not.toContain('uncommitted')
+    },
+    WORKTREE_CARD_IMPORT_TIMEOUT_MS
+  )
+
+  it.each([
+    ['compact cards', { compactWorktreeCards: true }],
+    ['the new card style', { experimentalNewWorktreeCardStyle: true }]
+  ])(
+    'shows the count on a bare workspace with %s',
+    async (_label, cardSettings) => {
+      // Why both: the trailing-cluster gate exists three times, one per card
+      // style, and only the default style was covered. Reverting either of the
+      // other two left the suite green while those users lost the badge.
+      settings = cardSettings
+      gitStatusByWorktree = { [WORKTREE_ID]: [{}, {}] }
+
+      const markup = await renderCard()
+
+      expect(markup).toContain('data-worktree-change-count')
+      expect(markup).toContain('>2<')
     },
     WORKTREE_CARD_IMPORT_TIMEOUT_MS
   )

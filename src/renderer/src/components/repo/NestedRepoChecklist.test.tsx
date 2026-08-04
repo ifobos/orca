@@ -77,6 +77,14 @@ describe('NestedRepoChecklist', () => {
       />
     )
 
+    // Why anchored and not merely counted: inverting the condition badges the
+    // plain clone and leaves the real submodule bare, and the count stays 1.
     expect(html.match(/Submodule/g)).toHaveLength(1)
+    const designIndex = html.indexOf('./web/design')
+    const badgeIndex = html.indexOf('Submodule')
+    const webIndex = html.indexOf('>web<')
+    expect(designIndex).toBeGreaterThan(-1)
+    expect(badgeIndex).toBeGreaterThan(webIndex)
+    expect(Math.abs(badgeIndex - designIndex)).toBeLessThan(400)
   })
 })
