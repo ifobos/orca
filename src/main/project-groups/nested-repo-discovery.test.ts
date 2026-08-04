@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { scanNestedRepos } from './nested-repo-discovery'
@@ -380,6 +380,87 @@ describe('scanNestedRepos', () => {
 
     expect(result.selectedPathKind).toBe('git_repo')
     expect(result.repos).toEqual([])
+  })
+
+  it('finds repos nested inside the selected repo when asked', async () => {
+    const root = await tempRoot()
+    await makeGitRepo(root)
+    await mkdir(join(root, 'packages', 'api'), { recursive: true })
+    await mkdir(join(root, 'packages', 'web'), { recursive: true })
+    await makeGitRepo(join(root, 'packages', 'api'))
+    await makeGitRepo(join(root, 'packages', 'web'))
+
+    const result = await scanNestedRepos({
+      path: root,
+      options: { includeReposInsideGitRepos: true }
+    })
+
+    expect(result.selectedPathKind).toBe('git_repo')
+    expect(result.repos.map((repo) => repo.displayName)).toEqual([basename(root), 'api', 'web'])
+    expect(result.repos[0]).toEqual({ path: root, displayName: basename(root), depth: 0 })
+  })
+
+  it('leaves a selected repo with no nested repos out of the candidate list', async () => {
+    const root = await tempRoot()
+    await makeGitRepo(root)
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'README.md'), '')
+
+    const result = await scanNestedRepos({
+      path: root,
+      options: { includeReposInsideGitRepos: true }
+    })
+
+    expect(result.selectedPathKind).toBe('git_repo')
+    expect(result.repos).toEqual([])
+  })
+
+  it('descends into discovered repos when asked', async () => {
+    const root = await tempRoot()
+    await mkdir(join(root, 'service', 'libs', 'sdk'), { recursive: true })
+    await makeGitRepo(join(root, 'service'))
+    await makeGitRepo(join(root, 'service', 'libs', 'sdk'))
+
+    const result = await scanNestedRepos({
+      path: root,
+      options: { includeReposInsideGitRepos: true }
+    })
+
+    expect(result.selectedPathKind).toBe('non_git_folder')
+    expect(result.repos.map((repo) => repo.displayName)).toEqual(['service', 'sdk'])
+  })
+
+  it('does not count the selected repo against the result cap', async () => {
+    const root = await tempRoot()
+    await makeGitRepo(root)
+    await mkdir(join(root, 'one'), { recursive: true })
+    await mkdir(join(root, 'two'), { recursive: true })
+    await makeGitRepo(join(root, 'one'))
+    await makeGitRepo(join(root, 'two'))
+
+    const result = await scanNestedRepos({
+      path: root,
+      options: { includeReposInsideGitRepos: true, maxRepos: 1 }
+    })
+
+    expect(result.truncated).toBe(true)
+    expect(result.repos.map((repo) => repo.displayName)).toEqual([basename(root), 'one'])
+  })
+
+  it('includes the selected repo in progress snapshots', async () => {
+    const root = await tempRoot()
+    await makeGitRepo(root)
+    await mkdir(join(root, 'child'), { recursive: true })
+    await makeGitRepo(join(root, 'child'))
+    const snapshots: string[][] = []
+
+    await scanNestedRepos({
+      path: root,
+      options: { includeReposInsideGitRepos: true },
+      onProgress: (scan) => snapshots.push(scan.repos.map((repo) => repo.displayName))
+    })
+
+    expect(snapshots).toEqual([[basename(root), 'child']])
   })
 
   it.skipIf(process.platform === 'win32')(

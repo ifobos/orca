@@ -1660,10 +1660,13 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       const completedScan = getCompletedNestedRepoScan(args)
       const scan =
         completedScan ??
+        // Why: this re-scan only validates paths the user already picked in the
+        // review step, so it stays maximally permissive. A narrower scan would
+        // reject a legitimate selection made from a repos-inside-repos layout.
         (await scanNestedReposForIpc({
           path: args.parentPath,
           connectionId: args.connectionId,
-          options: { timeoutMs: 15_000 }
+          options: { timeoutMs: 15_000, includeReposInsideGitRepos: true }
         }))
       const selection = resolveNestedRepoSelection({ scan, projectPaths: requestedPaths })
       const groupResolver = createNestedProjectGroupResolver({

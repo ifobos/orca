@@ -42,6 +42,7 @@ type NormalizedNestedRepoScanOptions = {
   maxDepth: number
   maxRepos: number
   timeoutMs: number | null
+  includeReposInsideGitRepos: boolean
 }
 
 const DEFAULT_MAX_DEPTH = 3
@@ -77,7 +78,8 @@ function normalizeScanOptions(options: unknown): NormalizedNestedRepoScanOptions
         ? null
         : typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs)
           ? Math.max(500, Math.min(30_000, Math.floor(raw.timeoutMs)))
-          : null
+          : null,
+    includeReposInsideGitRepos: raw.includeReposInsideGitRepos === true
   }
 }
 
@@ -246,15 +248,36 @@ export async function scanNestedRepos(args: {
     stopped = true
     return true
   }
+  const selectedPathIsGitRepo = await filesystem.isSelectedPathGitRepo(args.path)
+  const selectedPathKind: NestedRepoScanResult['selectedPathKind'] = selectedPathIsGitRepo
+    ? 'git_repo'
+    : 'non_git_folder'
+  // Why: the selected repo is the one the caller explicitly picked, so it is
+  // never a discovery and never spends the maxRepos budget. It joins the
+  // candidate list only once a nested repo turns up, which keeps the plain
+  // "add this repo" path free of a review step that has nothing to review.
+  const withSelectedRepoCandidate = (): NestedRepoScanResult => {
+    const result = buildResult(selectedPathKind)
+    if (!selectedPathIsGitRepo || result.repos.length === 0) {
+      return result
+    }
+    return {
+      ...result,
+      repos: [
+        { path: args.path, displayName: filesystem.basename(args.path), depth: 0 },
+        ...result.repos
+      ]
+    }
+  }
   const emitProgress = (): void => {
-    args.onProgress?.(buildResult('non_git_folder'))
+    args.onProgress?.(withSelectedRepoCandidate())
   }
 
-  if (await filesystem.isSelectedPathGitRepo(args.path)) {
+  if (selectedPathIsGitRepo && !options.includeReposInsideGitRepos) {
     return buildResult('git_repo')
   }
   if (noteAbort()) {
-    return buildResult('non_git_folder')
+    return withSelectedRepoCandidate()
   }
 
   const foldersToTraverse: TraversalFolder[] = [
@@ -332,9 +355,12 @@ export async function scanNestedRepos(args: {
           depth: currentFolder.depth + 1
         })
         emitProgress()
-        // Project Groups organize sibling repos; nested repos stay hidden until a
-        // later UI can explain and select submodule-style layouts explicitly.
-        continue
+        // Project Groups organize sibling repos, so by default a discovered repo
+        // ends the branch. Callers that opted into repos-inside-repos keep
+        // descending: a repo nested in a repo is exactly what they asked for.
+        if (!options.includeReposInsideGitRepos) {
+          continue
+        }
       }
       // Why: group import should prefer nearby sibling repos over spending the
       // bounded scan inside an alphabetically early, deeply nested folder.
@@ -349,5 +375,5 @@ export async function scanNestedRepos(args: {
     }
   }
 
-  return buildResult('non_git_folder')
+  return withSelectedRepoCandidate()
 }

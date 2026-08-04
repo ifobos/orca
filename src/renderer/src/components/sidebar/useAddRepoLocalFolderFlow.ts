@@ -108,11 +108,14 @@ export function useAddRepoLocalFolderFlow({
         const scan = await scanNestedRepos(path, undefined, {
           scanId,
           runtimeEnvironmentId: activeRuntimeEnvironmentId ?? null,
+          // Why: only the single-folder flow can stop and show a review, so it is
+          // the only one that pays for looking inside a repo the user picked.
+          // Batch keeps the cheap "this folder is a repo, add it" path.
+          includeReposInsideGitRepos: mode === 'single',
           onProgress: (progressScan) => {
             if (
               gen !== localAddGenRef.current ||
               mode === 'batch' ||
-              progressScan.selectedPathKind !== 'non_git_folder' ||
               progressScan.repos.length === 0
             ) {
               return
@@ -145,7 +148,9 @@ export function useAddRepoLocalFolderFlow({
         if (scan?.selectedPathKind === 'non_git_folder' && mode === 'batch') {
           return { status: 'skipped' }
         }
-        if (scan?.selectedPathKind === 'non_git_folder' && scan.repos.length > 0) {
+        // Why: a git parent reaches here with candidates only when it actually
+        // contains nested repos, so a plain repo still skips the review entirely.
+        if (scan && scan.repos.length > 0) {
           // Why: a single-folder decision point cannot queue competing batch review states.
           showNestedRepoReview({
             scan,

@@ -729,7 +729,9 @@ export function useOnboardingFlow(
         try {
           if (kind === 'git') {
             const attemptId = createNestedRepoTelemetryAttemptId()
-            const scan = await scanNestedRepos(path)
+            const scan = await scanNestedRepos(path, undefined, {
+              includeReposInsideGitRepos: true
+            })
             track(
               'add_repo_nested_scan_result',
               buildNestedRepoScanTelemetry({
@@ -739,7 +741,7 @@ export function useOnboardingFlow(
                 scan
               })
             )
-            if (scan?.selectedPathKind === 'non_git_folder' && scan.repos.length > 0) {
+            if (scan && scan.repos.length > 0) {
               showNestedRepoReview(scan, attemptId, 'runtime')
               return
             }

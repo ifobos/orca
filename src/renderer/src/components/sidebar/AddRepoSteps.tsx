@@ -28,6 +28,7 @@ export function useRemoteRepo(
       scanId?: string
       onProgress?: (scan: NestedRepoScanResult) => void
       runtimeEnvironmentId?: string | null
+      includeReposInsideGitRepos?: boolean
     }
   ) => Promise<NestedRepoScanResult | null>,
   showNestedRepoReview?: (
@@ -153,11 +154,11 @@ export function useRemoteRepo(
       const scan = await scanNestedRepos?.(trimmedRemotePath, selectedTargetId, {
         scanId,
         runtimeEnvironmentId: null,
+        includeReposInsideGitRepos: true,
         onProgress: (progressScan) => {
           if (
             gen !== remoteGenRef.current ||
             !mountedRef.current ||
-            progressScan.selectedPathKind !== 'non_git_folder' ||
             progressScan.repos.length === 0
           ) {
             return
@@ -176,7 +177,7 @@ export function useRemoteRepo(
         return
       }
       onNestedScanResult?.(scan ?? null, attemptId)
-      if (scan?.selectedPathKind === 'non_git_folder' && scan.repos.length > 0) {
+      if (scan && scan.repos.length > 0) {
         showNestedRepoReview?.(scan, trimmedRemotePath, selectedTargetId, attemptId, false, scanId)
         setRemoteNestedScanId(null)
         return

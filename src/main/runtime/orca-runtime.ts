@@ -202,6 +202,7 @@ import type {
   LinearIssueUpdate,
   LinearProjectSummary,
   LinearWorkspaceSelection,
+  NestedRepoScanOptions,
   NestedRepoScanResult,
   ProjectGroup,
   FolderWorkspace,
@@ -18488,11 +18489,20 @@ export class OrcaRuntimeService {
     return { deleted }
   }
 
-  async scanNestedRepos(path: string): Promise<NestedRepoScanResult> {
+  async scanNestedRepos(
+    path: string,
+    options?: Pick<NestedRepoScanOptions, 'includeReposInsideGitRepos'>
+  ): Promise<NestedRepoScanResult> {
     if (!isAbsolute(path)) {
       throw new Error('Project path must be an absolute path')
     }
-    return scanNestedRepos({ path, options: { timeoutMs: 15_000 } })
+    return scanNestedRepos({
+      path,
+      options: {
+        timeoutMs: 15_000,
+        includeReposInsideGitRepos: options?.includeReposInsideGitRepos === true
+      }
+    })
   }
 
   async browseServerDir(pathValue: string): Promise<{
@@ -18546,7 +18556,13 @@ export class OrcaRuntimeService {
     if (!isAbsolute(args.parentPath)) {
       throw new Error('Project path must be an absolute path')
     }
-    const scan = await scanNestedRepos({ path: args.parentPath, options: { timeoutMs: 15_000 } })
+    // Why: this re-scan only validates paths the user already picked in the
+    // review step, so it stays maximally permissive. A narrower scan would
+    // reject a legitimate selection made from a repos-inside-repos layout.
+    const scan = await scanNestedRepos({
+      path: args.parentPath,
+      options: { timeoutMs: 15_000, includeReposInsideGitRepos: true }
+    })
     const selection = resolveNestedRepoSelection({ scan, projectPaths: args.projectPaths })
     const groupResolver = createNestedProjectGroupResolver({
       parentPath: args.parentPath,
