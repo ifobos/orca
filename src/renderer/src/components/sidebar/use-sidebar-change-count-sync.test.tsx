@@ -46,6 +46,16 @@ vi.mock('@/lib/connection-context', () => ({
   getConnectionId: (worktreeId: string) => (worktreeId.startsWith('ssh-') ? 'ssh-1' : null)
 }))
 
+// Why derived from the store by default: every existing case then keeps its
+// meaning, and only the tests that care about visibility set an override.
+let visibleIdsOverride: string[] | null = null
+
+vi.mock('./visible-worktrees', () => ({
+  getVisibleWorktreeIds: () =>
+    visibleIdsOverride ??
+    Object.values(storeState.worktreesByRepo).flatMap((list) => (list ?? []).map((wt) => wt.id))
+}))
+
 vi.mock('@/lib/repo-runtime-owner', () => ({
   getRepoOwnerRoutedSettings: (settings: unknown, repo: unknown) => ({ routedFor: repo, settings })
 }))
@@ -131,6 +141,7 @@ beforeEach(() => {
   }
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   fsListeners = []
+  visibleIdsOverride = null
   ;(window as unknown as { api: unknown }).api = {
     fs: {
       onFsChanged: (callback: (payload: { worktreePath: string; events: unknown[] }) => void) => {
@@ -404,28 +415,6 @@ describe('useSidebarChangeCountSync', () => {
     expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps event-driven sweeps at least three seconds apart', async () => {
-    // Why: without a floor a steady event stream would chain sweeps back to back
-    // and become continuous polling.
-    await mount()
-    await act(async () => {
-      emitFsChanged()
-      await vi.advanceTimersByTimeAsync(400)
-    })
-    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
-
-    await act(async () => {
-      emitFsChanged()
-      await vi.advanceTimersByTimeAsync(400)
-    })
-    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_700)
-    })
-    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(6)
-  })
-
   it('stops listening for filesystem events when it unmounts', async () => {
     await mount()
     expect(fsListeners).toHaveLength(1)
@@ -438,17 +427,31 @@ describe('useSidebarChangeCountSync', () => {
     expect(fsListeners).toHaveLength(0)
   })
 
-  it('skips archived workspaces, which the sidebar does not render', async () => {
-    // Why: visible-worktrees filters archived workspaces out, so polling one buys
-    // a `git status` for a row that never appears.
-    storeState.worktreesByRepo = {
-      'git-1': [makeWorktree('git-1', '/repos/git-1')],
-      'git-2': [makeWorktree('git-2', '/repos/git-2', { isArchived: true })]
-    }
+  it('polls only the workspaces the sidebar actually renders', async () => {
+    // Why: the sidebar hides archived, default-branch, automation-created and
+    // filtered-out workspaces. Polling one of those buys a `git status` for a row
+    // that never appears, so the sweep follows the rendered set.
+    visibleIdsOverride = ['git-1::/repos/git-1']
 
     await mount()
 
     expect(polledPaths()).toEqual(['/repos/git-1'])
+  })
+
+  it('does not sweep on an event while the window is hidden', async () => {
+    // Why: the event paths call sweep() directly, bypassing the interval's own
+    // visibility gate, so without a check here a minimised window keeps fanning
+    // out one `git status` per workspace.
+    await mount()
+    refreshGitStatusForWorktree.mockClear()
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
   })
 
   it('defers a request that arrives mid-sweep instead of dropping it', async () => {
@@ -460,22 +463,49 @@ describe('useSidebarChangeCountSync', () => {
     )
 
     await mount()
-    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
-
-    // An event lands while the mount sweep is still running.
     await act(async () => {
       emitFsChanged()
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(1_000)
     })
+    // Still the mount sweep's two calls: the request is held, not run.
     expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
 
-    // Let the first sweep finish; the deferred request must still run.
     refreshGitStatusForWorktree.mockResolvedValue(undefined)
     await act(async () => {
       releases.forEach((resolve) => resolve())
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(10_000)
     })
 
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+  })
+
+  it('backs off in proportion to how long the last sweep took', async () => {
+    // Why: a fixed floor either makes a cheap sweep feel sluggish or fails to
+    // bound an expensive one. Here a ~2s sweep must buy ~4s of idle before an
+    // event may sweep again, where a fast sweep only waits the quiet period.
+    const releases: (() => void)[] = []
+    refreshGitStatusForWorktree.mockImplementation(
+      () => new Promise<void>((resolve) => releases.push(resolve))
+    )
+
+    await mount()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+      refreshGitStatusForWorktree.mockResolvedValue(undefined)
+      releases.forEach((resolve) => resolve())
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    // The quiet period alone is not enough after a sweep that cost 2s.
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_700)
+    })
     expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
   })
 })

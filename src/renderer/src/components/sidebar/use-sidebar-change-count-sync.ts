@@ -2,13 +2,14 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '@/store'
 import { getConnectionId } from '@/lib/connection-context'
 import { getRepoOwnerRoutedSettings } from '@/lib/repo-runtime-owner'
-import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
+import { installWindowVisibilityInterval, isWindowVisible } from '@/lib/window-visibility-interval'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import type { Repo, Worktree } from '../../../../shared/types'
 import {
   refreshGitStatusForWorktree,
   type GitStatusRefreshDeps
 } from '../right-sidebar/git-status-refresh'
+import { getVisibleWorktreeIds } from './visible-worktrees'
 
 // Why: the sidebar summary is glanceable context, not the panel the user is
 // reading, so it polls on the slow branch cadence rather than the status one.
@@ -18,13 +19,16 @@ const SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS = 30_000
 // stampeding the host while still finishing a sweep well inside one interval.
 const MAX_CONCURRENT_SWEEP_REQUESTS = 4
 // Why: a build or a branch switch writes hundreds of files at once, and several
-// agents can finish within the same second. Collapsing a burst into one sweep is
-// the failure mode VS Code's git extension is repeatedly reported for.
+// agents can finish within the same second. Without a quiet period each one would
+// spawn its own sweep -- the failure mode VS Code's git extension is repeatedly
+// reported for.
 const EVENT_QUIET_PERIOD_MS = 400
-// Why: bounds the worst case by design. Without a floor, a steady stream of
-// events could chain sweeps back to back and turn this into continuous polling
-// -- exactly what measuring the cost told us not to do.
-const MIN_EVENT_SWEEP_SPACING_MS = 3_000
+// Why proportional to how long the last sweep took, rather than a fixed floor: a
+// fixed floor either makes the cheap common case feel sluggish or fails to bound
+// the expensive one -- once a sweep outlasts the floor, the elapsed time already
+// exceeds it and sweeps chain back to back. Two parts idle per part working caps
+// the duty cycle near a third whatever a sweep costs on this machine and host.
+const EVENT_SWEEP_IDLE_MULTIPLIER = 2
 
 const EMPTY_REPOS: Repo[] = []
 const EMPTY_WORKTREES_BY_REPO: Record<string, Worktree[]> = {}
@@ -81,22 +85,29 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     const controller = new AbortController()
     let sweepInFlight = false
     let sweepRequestedWhileRunning = false
+    let lastSweepEndedAt = 0
+    let lastSweepDurationMs = 0
 
     const collectTargets = (): Worktree[] => {
       const inputs = inputsRef.current
       const gitRepoIds = new Set(
         inputs.repos.filter((repo) => !isFolderRepo(repo)).map((repo) => repo.id)
       )
+      // Why the rendered set rather than every known workspace: a count only
+      // matters where a row exists to carry it. The sidebar also drops archived,
+      // default-branch, automation- and CLI-created and detached-head workspaces
+      // and applies the repo and host filters; restating that here would drift
+      // from it. Cost: a workspace hidden by a transient filter keeps a stale
+      // count until the first tick after it reappears.
+      const visibleIds = new Set(getVisibleWorktreeIds())
       const targets: Worktree[] = []
       for (const worktrees of Object.values(inputs.worktreesByRepo)) {
         for (const worktree of worktrees ?? []) {
-          // Folder workspaces have no Git status to summarize, and an archived
-          // workspace has no row to show a count on -- visible-worktrees filters
-          // it out, so polling it would buy nothing forever. The ACTIVE workspace
-          // is deliberately kept: Source Control only polls it while the right
-          // sidebar shows that tab, so skipping it here would leave the selected
-          // row -- the one most likely being looked at -- blank.
-          if (!gitRepoIds.has(worktree.repoId) || worktree.isArchived) {
+          // Folder workspaces have no Git status to summarize. The ACTIVE
+          // workspace is deliberately kept: Source Control only polls it while
+          // the right sidebar shows that tab, so skipping it here would leave the
+          // selected row -- the one most likely being looked at -- blank.
+          if (!gitRepoIds.has(worktree.repoId) || !visibleIds.has(worktree.id)) {
             continue
           }
           targets.push(worktree)
@@ -143,15 +154,22 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       if (controller.signal.aborted) {
         return
       }
+      // Why here and not only in the interval: the event paths call sweep()
+      // directly, so a hidden window would still fan out a `git status` per
+      // workspace for a sidebar nobody can see. A skipped run is not lost --
+      // becoming visible again triggers a catch-up sweep.
+      if (!isWindowVisible()) {
+        return
+      }
       // Why: a sweep slower than the interval must not stack another one on top
       // and double every workspace's Git load -- but dropping the request would
       // lose whatever prompted it until the next tick, so remember it instead.
-      // Window visibility is the interval's business, not this function's.
       if (sweepInFlight) {
         sweepRequestedWhileRunning = true
         return
       }
       sweepInFlight = true
+      const startedAt = Date.now()
       try {
         const targets = collectTargets()
         let nextIndex = 0
@@ -165,6 +183,10 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
         )
       } finally {
         sweepInFlight = false
+        // Why recorded here: the backoff below measures idle time from when work
+        // ended and scales it by what the work cost.
+        lastSweepEndedAt = Date.now()
+        lastSweepDurationMs = lastSweepEndedAt - startedAt
       }
       if (sweepRequestedWhileRunning) {
         sweepRequestedWhileRunning = false
@@ -179,19 +201,18 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     // anywhere by absolute path -- so scoping by path would be unsound, not just
     // more code. sweep()'s in-flight guard already collapses concurrent requests.
     let quietPeriodTimer: ReturnType<typeof setTimeout> | null = null
-    let lastEventSweepAt = 0
     const requestEventSweep = (): void => {
       if (controller.signal.aborted || quietPeriodTimer) {
         return
       }
-      const sinceLastSweep = Date.now() - lastEventSweepAt
-      const delay = Math.max(EVENT_QUIET_PERIOD_MS, MIN_EVENT_SWEEP_SPACING_MS - sinceLastSweep)
+      const idleTargetMs = lastSweepDurationMs * EVENT_SWEEP_IDLE_MULTIPLIER
+      const idleSoFarMs = Date.now() - lastSweepEndedAt
+      const delay = Math.max(EVENT_QUIET_PERIOD_MS, idleTargetMs - idleSoFarMs)
       quietPeriodTimer = setTimeout(() => {
         quietPeriodTimer = null
         if (controller.signal.aborted) {
           return
         }
-        lastEventSweepAt = Date.now()
         void sweep()
       }, delay)
     }
