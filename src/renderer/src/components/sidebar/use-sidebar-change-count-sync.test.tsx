@@ -508,4 +508,29 @@ describe('useSidebarChangeCountSync', () => {
     })
     expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
   })
+
+  it('reuses cached line stats, which the count never displays', async () => {
+    // Why: without this every polled workspace re-runs `git diff --numstat` and
+    // re-reads each changed untracked file for numbers no row or hover shows.
+    await mount()
+
+    expect(refreshGitStatusForWorktree.mock.calls[0][0]).toMatchObject({
+      request: { reuseLineStats: true }
+    })
+  })
+
+  it('never writes upstream state', async () => {
+    // Why: porcelain reports Git's configured upstream, which is wrong for a
+    // PR-created workspace whose publish target is Orca's own -- writing it would
+    // flip Source Control's primary action to "Publish Branch" on a published
+    // branch. The count needs no upstream data at all.
+    await mount()
+
+    const passedDeps = refreshGitStatusForWorktree.mock.calls[0][0].deps
+    passedDeps.setUpstreamStatus('git-1::/repos/git-1', {} as never)
+    await passedDeps.fetchUpstreamStatus('git-1::/repos/git-1', '/repos/git-1')
+
+    expect(setUpstreamStatus).not.toHaveBeenCalled()
+    expect(fetchUpstreamStatus).not.toHaveBeenCalled()
+  })
 })

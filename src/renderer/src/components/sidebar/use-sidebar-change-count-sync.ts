@@ -30,6 +30,9 @@ const EVENT_QUIET_PERIOD_MS = 400
 // the duty cycle near a third whatever a sweep costs on this machine and host.
 const EVENT_SWEEP_IDLE_MULTIPLIER = 2
 
+const NO_UPSTREAM_WRITE: GitStatusRefreshDeps['setUpstreamStatus'] = () => {}
+const NO_UPSTREAM_FETCH: GitStatusRefreshDeps['fetchUpstreamStatus'] = async () => null
+
 const EMPTY_REPOS: Repo[] = []
 const EMPTY_WORKTREES_BY_REPO: Record<string, Worktree[]> = {}
 
@@ -51,8 +54,6 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
   const settings = useAppStore((s) => s.settings)
   const setGitStatus = useAppStore((s) => s.setGitStatus)
   const updateWorktreeGitIdentity = useAppStore((s) => s.updateWorktreeGitIdentity)
-  const setUpstreamStatus = useAppStore((s) => s.setUpstreamStatus)
-  const fetchUpstreamStatus = useAppStore((s) => s.fetchUpstreamStatus)
   // Why: agents are the main writer to workspaces the user is not looking at, so
   // an agent going live or finishing is the strongest available signal that some
   // project's tree just changed. The epoch moves on any liveness change.
@@ -67,7 +68,18 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     repos,
     worktreesByRepo,
     settings,
-    deps: { setGitStatus, updateWorktreeGitIdentity, setUpstreamStatus, fetchUpstreamStatus }
+    // Why the sweep writes no upstream state: the count needs none of it, and
+    // porcelain reports Git's *configured* upstream -- the wrong answer for a
+    // PR-created workspace whose publish target is Orca's own. Writing it would
+    // clobber the panel's correct comparison and flip its primary action to
+    // "Publish Branch" on a branch that is already published. Branch identity is
+    // still worth taking: rows display it.
+    deps: {
+      setGitStatus,
+      updateWorktreeGitIdentity,
+      setUpstreamStatus: NO_UPSTREAM_WRITE,
+      fetchUpstreamStatus: NO_UPSTREAM_FETCH
+    }
   }
   const inputsRef = useRef<PollInputs>(inputs)
   // Why assigned during render and not in an effect: the sweep reads this from
@@ -137,10 +149,12 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
           worktreeId: worktree.id,
           worktreePath: worktree.path,
           ...(connectionId ? { connectionId } : {}),
-          // pushTarget is deliberately omitted: reconciling an explicit publish
-          // target spawns extra Git work the count does not need.
           deps: inputs.deps,
           request: {
+            // Why: line counts cost extra `git diff --numstat` spawns and a read of
+            // every changed untracked file, and neither the row count nor the hover
+            // breakdown displays them. The panel's idle poll reuses them too.
+            reuseLineStats: true,
             signal: controller.signal,
             shouldApply: () => !controller.signal.aborted
           }
