@@ -14,6 +14,14 @@ const SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS = 30_000
 // a round trip over SSH. A small window keeps a large project list from
 // stampeding the host while still finishing a sweep well inside one interval.
 const MAX_CONCURRENT_SWEEP_REQUESTS = 4
+// Why: a build or a branch switch writes hundreds of files at once, and several
+// agents can finish within the same second. Collapsing a burst into one sweep is
+// the failure mode VS Code's git extension is repeatedly reported for.
+const EVENT_QUIET_PERIOD_MS = 400
+// Why: bounds the worst case by design. Without a floor, a steady stream of
+// events could chain sweeps back to back and turn this into continuous polling
+// -- exactly what measuring the cost told us not to do.
+const MIN_EVENT_SWEEP_SPACING_MS = 3_000
 
 const EMPTY_REPOS: Repo[] = []
 const EMPTY_WORKTREES_BY_REPO: Record<string, Worktree[]> = {}
@@ -33,7 +41,7 @@ type PollInputs = {
  * sidebar, so each row can show its uncommitted-change count without being
  * opened.
  */
-export function useSidebarChangeCountPoll({ enabled }: { enabled: boolean }): void {
+export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): void {
   const repos = useAppStore((s) => s.repos) ?? EMPTY_REPOS
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo) ?? EMPTY_WORKTREES_BY_REPO
   const settings = useAppStore((s) => s.settings)
@@ -41,6 +49,12 @@ export function useSidebarChangeCountPoll({ enabled }: { enabled: boolean }): vo
   const updateWorktreeGitIdentity = useAppStore((s) => s.updateWorktreeGitIdentity)
   const setUpstreamStatus = useAppStore((s) => s.setUpstreamStatus)
   const fetchUpstreamStatus = useAppStore((s) => s.fetchUpstreamStatus)
+  // Why: agents are the main writer to workspaces the user is not looking at, so
+  // an agent going live or finishing is the strongest available signal that some
+  // project's tree just changed. The epoch moves on any liveness change.
+  const agentStatusEpoch = useAppStore((s) => s.agentStatusEpoch) ?? 0
+  const requestEventSweepRef = useRef<() => void>(() => {})
+  const lastSeenAgentEpochRef = useRef<number | null>(null)
 
   // Why: everything the sweep needs comes through this ref, so the effect below
   // depends only on `enabled`. Re-running it aborts in-flight `git status`
@@ -164,9 +178,61 @@ export function useSidebarChangeCountPoll({ enabled }: { enabled: boolean }): vo
       intervalMs: SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS
     })
 
+    // Why: refresh every workspace rather than guessing which one an event
+    // belongs to. An agent is not confined to its own worktree -- it can write
+    // anywhere by absolute path -- so scoping by path would be unsound, not just
+    // more code. sweep()'s in-flight guard already collapses concurrent requests.
+    let quietPeriodTimer: ReturnType<typeof setTimeout> | null = null
+    let lastEventSweepAt = 0
+    const requestEventSweep = (): void => {
+      if (controller.signal.aborted || quietPeriodTimer) {
+        return
+      }
+      const sinceLastSweep = Date.now() - lastEventSweepAt
+      const delay = Math.max(EVENT_QUIET_PERIOD_MS, MIN_EVENT_SWEEP_SPACING_MS - sinceLastSweep)
+      quietPeriodTimer = setTimeout(() => {
+        quietPeriodTimer = null
+        if (controller.signal.aborted) {
+          return
+        }
+        lastEventSweepAt = Date.now()
+        void sweep()
+      }, delay)
+    }
+    requestEventSweepRef.current = requestEventSweep
+
+    // Why: the app already watches the working tree of whatever the user has
+    // open, and nothing consumed those events for Git status. Reusing them makes
+    // an edit show up at once instead of on the next tick, at no watcher cost.
+    // The watcher ignores .git, so commits made outside Orca still wait for the
+    // interval -- that is what keeps the interval worth having.
+    const unsubscribeFsChanged = window.api?.fs?.onFsChanged?.(() => requestEventSweep()) ?? null
+
     return () => {
       controller.abort()
       uninstallInterval()
+      unsubscribeFsChanged?.()
+      if (quietPeriodTimer) {
+        clearTimeout(quietPeriodTimer)
+      }
+      requestEventSweepRef.current = () => {}
     }
   }, [enabled])
+
+  useEffect(() => {
+    if (!enabled) {
+      return
+    }
+    // Why: the mount sweep already covered the epoch we start on; only a change
+    // after that means an agent moved.
+    if (lastSeenAgentEpochRef.current === null) {
+      lastSeenAgentEpochRef.current = agentStatusEpoch
+      return
+    }
+    if (lastSeenAgentEpochRef.current === agentStatusEpoch) {
+      return
+    }
+    lastSeenAgentEpochRef.current = agentStatusEpoch
+    requestEventSweepRef.current()
+  }, [agentStatusEpoch, enabled])
 }

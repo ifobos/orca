@@ -13,6 +13,7 @@ const setUpstreamStatus = vi.fn()
 const fetchUpstreamStatus = vi.fn()
 
 type StoreShape = {
+  agentStatusEpoch: number
   repos: Repo[]
   worktreesByRepo: Record<string, Worktree[]>
   settings: unknown
@@ -25,6 +26,13 @@ type StoreShape = {
 let storeState: StoreShape
 let root: Root | null = null
 let container: HTMLDivElement | null = null
+let fsListeners: ((payload: { worktreePath: string; events: unknown[] }) => void)[] = []
+
+function emitFsChanged(worktreePath = '/repos/git-1'): void {
+  for (const listener of fsListeners) {
+    listener({ worktreePath, events: [] })
+  }
+}
 
 vi.mock('@/store', () => ({
   useAppStore: (selector: (state: unknown) => unknown) => selector(storeState)
@@ -42,7 +50,7 @@ vi.mock('@/lib/repo-runtime-owner', () => ({
   getRepoOwnerRoutedSettings: (settings: unknown, repo: unknown) => ({ routedFor: repo, settings })
 }))
 
-const { useSidebarChangeCountPoll } = await import('./use-sidebar-change-count-poll')
+const { useSidebarChangeCountSync } = await import('./use-sidebar-change-count-sync')
 
 function makeRepo(id: string, overrides: Partial<Repo> = {}): Repo {
   return {
@@ -78,7 +86,7 @@ function makeWorktree(repoId: string, path: string): Worktree {
 }
 
 function Probe({ enabled }: { enabled: boolean }): null {
-  useSidebarChangeCountPoll({ enabled })
+  useSidebarChangeCountSync({ enabled })
   return null
 }
 
@@ -108,6 +116,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   refreshGitStatusForWorktree.mockResolvedValue(undefined)
   storeState = {
+    agentStatusEpoch: 0,
     repos: [makeRepo('git-1'), makeRepo('git-2')],
     worktreesByRepo: {
       'git-1': [makeWorktree('git-1', '/repos/git-1')],
@@ -120,6 +129,17 @@ beforeEach(() => {
     fetchUpstreamStatus
   }
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+  fsListeners = []
+  ;(window as unknown as { api: unknown }).api = {
+    fs: {
+      onFsChanged: (callback: (payload: { worktreePath: string; events: unknown[] }) => void) => {
+        fsListeners.push(callback)
+        return () => {
+          fsListeners = fsListeners.filter((entry) => entry !== callback)
+        }
+      }
+    }
+  }
 })
 
 afterEach(async () => {
@@ -129,10 +149,12 @@ afterEach(async () => {
   container?.remove()
   root = null
   container = null
+  fsListeners = []
+  delete (window as unknown as { api?: unknown }).api
   vi.useRealTimers()
 })
 
-describe('useSidebarChangeCountPoll', () => {
+describe('useSidebarChangeCountSync', () => {
   it('sweeps every Git workspace on mount', async () => {
     await mount()
 
@@ -309,5 +331,109 @@ describe('useSidebarChangeCountPoll', () => {
 
     expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
     expect(firstSignal.aborted).toBe(false)
+  })
+
+  it('sweeps after a filesystem event, once the quiet period passes', async () => {
+    await mount()
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(399)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+  })
+
+  it('collapses a burst of filesystem events into a single sweep', async () => {
+    // Why: a build writes hundreds of files; one sweep must answer for all of them.
+    await mount()
+
+    await act(async () => {
+      for (let i = 0; i < 20; i++) {
+        emitFsChanged()
+      }
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+  })
+
+  it('sweeps every workspace on an event, not just the one it names', async () => {
+    // Why: an agent can write outside its own worktree by absolute path, so
+    // scoping the refresh to the event's path would miss real changes.
+    await mount()
+    refreshGitStatusForWorktree.mockClear()
+
+    await act(async () => {
+      emitFsChanged('/repos/git-1')
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    expect(polledPaths()).toEqual(['/repos/git-1', '/repos/git-2'])
+  })
+
+  it('sweeps when an agent changes liveness', async () => {
+    await mount()
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    storeState = { ...storeState, agentStatusEpoch: 1 }
+    await rerender(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+  })
+
+  it('ignores the agent epoch it mounts on', async () => {
+    // Why: the mount sweep already covered that state; only a later change means
+    // an agent actually moved.
+    storeState.agentStatusEpoch = 7
+
+    await mount()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps event-driven sweeps at least three seconds apart', async () => {
+    // Why: without a floor a steady event stream would chain sweeps back to back
+    // and become continuous polling.
+    await mount()
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_700)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(6)
+  })
+
+  it('stops listening for filesystem events when it unmounts', async () => {
+    await mount()
+    expect(fsListeners).toHaveLength(1)
+
+    await act(async () => {
+      root?.unmount()
+    })
+    root = null
+
+    expect(fsListeners).toHaveLength(0)
   })
 })
