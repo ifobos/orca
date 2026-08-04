@@ -53,8 +53,11 @@ export function WorktreeCardChangeCountBadge({
             className
           )}
         >
+          {/* Why both hidden: the sr-only sentence is the accessible name. Leaving
+              the number exposed makes AT read "3" and then "3 uncommitted
+              changes", where WorktreeActivityStatusIndicator reads once. */}
           <FileDiff className="size-3.5" aria-hidden="true" />
-          <span>{isCapped ? `${changeCount}+` : changeCount}</span>
+          <span aria-hidden="true">{isCapped ? `${changeCount}+` : changeCount}</span>
           <span className="sr-only">{label}</span>
         </span>
       </TooltipTrigger>

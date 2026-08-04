@@ -38,10 +38,11 @@ describe('summarizeWorktreeChanges', () => {
   })
 
   it('counts a dirty submodule once, not also as a file', () => {
-    // Why: the real Knewton-FE shape — two untracked files plus a dirty submodule
-    // reported as one working-tree change, which is why the row reads 3.
+    // Why: the shape that prompted this — two untracked files plus a dirty
+    // submodule reported as one working-tree change, so the row reads 3 while the
+    // user only edited two files.
     const summary = summarizeWorktreeChanges([
-      dirtySubmodule('knewton-design'),
+      dirtySubmodule('design-system'),
       file('untracked', 'one.txt'),
       file('untracked', 'two.txt')
     ])

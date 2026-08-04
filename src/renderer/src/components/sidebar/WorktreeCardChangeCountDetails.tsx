@@ -70,9 +70,7 @@ export function WorktreeCardChangeCountDetails({
 }: {
   worktreeId: string
 }): React.JSX.Element | null {
-  const entries = useAppStore(
-    (s) => s.gitStatusByWorktree?.[worktreeId] as GitStatusEntry[] | undefined
-  )
+  const entries = useAppStore((s) => s.gitStatusByWorktree?.[worktreeId])
   const isCapped = useWorktreeChangeCountIsCapped(worktreeId)
   if (!entries || entries.length === 0) {
     return null
