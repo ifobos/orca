@@ -11421,7 +11421,8 @@
           "f7e1170567": "seleccionado",
           "ea54c7bf8f": "de",
           "91b5bcadb6": "Seleccionar todo",
-          "929734aea5": "Deseleccionar todo"
+          "929734aea5": "Deseleccionar todo",
+          "3f906671a9": "Submódulo"
         },
         "NestedRepoScanLimitNotice": {
           "642a43c139": "Límites de escaneo de repositorios anidados",

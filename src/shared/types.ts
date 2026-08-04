@@ -383,6 +383,9 @@ export type NestedRepoCandidate = {
   path: string
   displayName: string
   depth: number
+  // Set when an enclosing repo's .gitmodules registers this path, so the import
+  // review can say the parent owns the checked-out commit.
+  isSubmodule?: boolean
 }
 
 export type NestedRepoScanResult = {

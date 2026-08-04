@@ -31,11 +31,18 @@ type IgnoreRule = {
   baseSegments: string[]
 }
 
+// A .gitmodules entry, resolved against the repo root that declared it.
+type SubmoduleRule = {
+  segments: string[]
+  baseSegments: string[]
+}
+
 type TraversalFolder = {
   path: string
   depth: number
   segments: string[]
   ignoreRules: IgnoreRule[]
+  submoduleRules: SubmoduleRule[]
 }
 
 type NormalizedNestedRepoScanOptions = {
@@ -168,6 +175,50 @@ function matchesIgnoreRules(segments: string[], rules: IgnoreRule[]): boolean {
   return ignored
 }
 
+function parseGitmodulesRules(content: string, baseSegments: string[]): SubmoduleRule[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => /^\s*path\s*=\s*(.+?)\s*$/.exec(line)?.[1])
+    .filter((value): value is string => value !== undefined)
+    .map((value) => ({
+      segments: value.replace(/\\/g, '/').split('/').filter(Boolean),
+      baseSegments
+    }))
+    .filter((rule) => rule.segments.length > 0)
+}
+
+function isSubmodulePath(segments: string[], rules: SubmoduleRule[]): boolean {
+  return rules.some(
+    (rule) =>
+      segments.length === rule.baseSegments.length + rule.segments.length &&
+      rule.segments.every(
+        (segment, index) => segment === segments[rule.baseSegments.length + index]
+      )
+  )
+}
+
+async function readGitmodulesRules(args: {
+  folderPath: string
+  entries: NestedRepoDirectoryEntry[]
+  filesystem: NestedRepoScanFilesystem
+  baseSegments: string[]
+}): Promise<SubmoduleRule[]> {
+  if (
+    !args.filesystem.readTextFile ||
+    !args.entries.some((entry) => entry.name === '.gitmodules')
+  ) {
+    return []
+  }
+  try {
+    return parseGitmodulesRules(
+      await args.filesystem.readTextFile(args.filesystem.joinPath(args.folderPath, '.gitmodules')),
+      args.baseSegments
+    )
+  } catch {
+    return []
+  }
+}
+
 async function readGitignoreRules(args: {
   folderPath: string
   entries: NestedRepoDirectoryEntry[]
@@ -288,7 +339,7 @@ export async function scanNestedRepos(args: {
   }
 
   const foldersToTraverse: TraversalFolder[] = [
-    { path: args.path, depth: 0, segments: [], ignoreRules: [] }
+    { path: args.path, depth: 0, segments: [], ignoreRules: [], submoduleRules: [] }
   ]
   let nextFolderIndex = 0
 
@@ -332,6 +383,15 @@ export async function scanNestedRepos(args: {
             baseSegments: currentFolder.segments
           }))
         ]
+    const currentSubmoduleRules = [
+      ...currentFolder.submoduleRules,
+      ...(await readGitmodulesRules({
+        folderPath: currentFolder.path,
+        entries,
+        filesystem,
+        baseSegments: currentFolder.segments
+      }))
+    ]
 
     const dirs = entries
       .filter((entry) => entry.isDirectory && !entry.isSymlink)
@@ -367,7 +427,9 @@ export async function scanNestedRepos(args: {
         repos.push({
           path: childPath,
           displayName: filesystem.basename(childPath),
-          depth: currentFolder.depth + 1
+          depth: currentFolder.depth + 1,
+          // Spread so a plain repo's candidate shape stays untouched.
+          ...(isSubmodulePath(childSegments, currentSubmoduleRules) ? { isSubmodule: true } : {})
         })
         emitProgress()
         // Project Groups organize sibling repos, so by default a discovered repo
@@ -384,7 +446,8 @@ export async function scanNestedRepos(args: {
           path: childPath,
           depth: currentFolder.depth + 1,
           segments: childSegments,
-          ignoreRules: currentIgnoreRules
+          ignoreRules: currentIgnoreRules,
+          submoduleRules: currentSubmoduleRules
         })
       }
     }

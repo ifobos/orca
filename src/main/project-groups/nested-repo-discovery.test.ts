@@ -334,6 +334,65 @@ describe('scanNestedRepos', () => {
     ])
   })
 
+  it('marks candidates registered in an enclosing .gitmodules', async () => {
+    const directories = new Map([
+      ['/workspace', ['api', 'web']],
+      // Why: the real shape — the submodule is declared by the child repo that
+      // owns it, not by the folder the user selected.
+      ['/workspace/api', ['.gitmodules', 'design', 'clone']],
+      ['/workspace/web', []]
+    ])
+    const files = new Map([
+      [
+        '/workspace/api/.gitmodules',
+        '[submodule "design"]\n\tpath = design\n\turl = git@host:design\n'
+      ]
+    ])
+    const gitRepos = new Set([
+      '/workspace',
+      '/workspace/api',
+      '/workspace/web',
+      '/workspace/api/design',
+      '/workspace/api/clone'
+    ])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos, files })
+    })
+
+    expect(result.repos).toEqual([
+      { path: '/workspace', displayName: 'workspace', depth: 0 },
+      { path: '/workspace/api', displayName: 'api', depth: 1 },
+      { path: '/workspace/web', displayName: 'web', depth: 1 },
+      // Only the declared path is a submodule; its sibling clone is not.
+      { path: '/workspace/api/clone', displayName: 'clone', depth: 2 },
+      { path: '/workspace/api/design', displayName: 'design', depth: 2, isSubmodule: true }
+    ])
+  })
+
+  it('resolves nested .gitmodules paths against the declaring repo', async () => {
+    const directories = new Map([
+      ['/workspace', ['.gitmodules', 'third-party']],
+      ['/workspace/third-party', ['lib']],
+      ['/workspace/third-party/lib', []]
+    ])
+    const files = new Map([['/workspace/.gitmodules', '\tpath = third-party/lib\n']])
+    const gitRepos = new Set(['/workspace', '/workspace/third-party/lib'])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos, files })
+    })
+
+    expect(result.repos).toEqual([
+      { path: '/workspace', displayName: 'workspace', depth: 0 },
+      { path: '/workspace/third-party/lib', displayName: 'lib', depth: 2, isSubmodule: true }
+    ])
+  })
+
   it('bounds a repos-inside-repos scan with a default timeout', async () => {
     const result = await scanNestedRepos({
       path: '/workspace',

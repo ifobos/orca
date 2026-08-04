@@ -11832,7 +11832,8 @@
           "f7e1170567": "selected",
           "ea54c7bf8f": "of",
           "91b5bcadb6": "Select all",
-          "929734aea5": "Deselect all"
+          "929734aea5": "Deselect all",
+          "3f906671a9": "Submodule"
         },
         "NestedRepoScanLimitNotice": {
           "642a43c139": "Nested repository scan limits",
