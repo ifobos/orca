@@ -5,7 +5,10 @@ import { getRepoOwnerRoutedSettings } from '@/lib/repo-runtime-owner'
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import type { Repo, Worktree } from '../../../../shared/types'
-import { refreshGitStatusForWorktree } from '../right-sidebar/git-status-refresh'
+import {
+  refreshGitStatusForWorktree,
+  type GitStatusRefreshDeps
+} from '../right-sidebar/git-status-refresh'
 
 // Why: the sidebar summary is glanceable context, not the panel the user is
 // reading, so it polls on the slow branch cadence rather than the status one.
@@ -29,11 +32,8 @@ const EMPTY_WORKTREES_BY_REPO: Record<string, Worktree[]> = {}
 type PollInputs = {
   repos: readonly Repo[]
   worktreesByRepo: Record<string, Worktree[] | undefined>
-  settings: unknown
-  setGitStatus: unknown
-  updateWorktreeGitIdentity: unknown
-  setUpstreamStatus: unknown
-  fetchUpstreamStatus: unknown
+  settings: Parameters<typeof getRepoOwnerRoutedSettings>[0]
+  deps: GitStatusRefreshDeps
 }
 
 /**
@@ -59,24 +59,20 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
   // Why: everything the sweep needs comes through this ref, so the effect below
   // depends only on `enabled`. Re-running it aborts in-flight `git status`
   // calls, which silently drops whichever workspaces the sweep had not reached.
-  const inputsRef = useRef<PollInputs>({
+  const inputs: PollInputs = {
     repos,
     worktreesByRepo,
     settings,
-    setGitStatus,
-    updateWorktreeGitIdentity,
-    setUpstreamStatus,
-    fetchUpstreamStatus
-  })
-  inputsRef.current = {
-    repos,
-    worktreesByRepo,
-    settings,
-    setGitStatus,
-    updateWorktreeGitIdentity,
-    setUpstreamStatus,
-    fetchUpstreamStatus
+    deps: { setGitStatus, updateWorktreeGitIdentity, setUpstreamStatus, fetchUpstreamStatus }
   }
+  const inputsRef = useRef<PollInputs>(inputs)
+  // Why assigned during render and not in an effect: the sweep reads this from
+  // timers, filesystem events and agent transitions, which fire at any moment. An
+  // effect would leave a window between render and commit where the ref still
+  // holds the previous workspace list, and an event landing there would sweep the
+  // wrong set. Writing during render is a render side effect, but a discarded
+  // render only leaves fresher values behind -- never an inconsistent pair.
+  inputsRef.current = inputs
 
   useEffect(() => {
     if (!enabled) {
@@ -112,7 +108,9 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     const refreshTarget = async (worktree: Worktree): Promise<void> => {
       const inputs = inputsRef.current
       const repo = inputs.repos.find((candidate) => candidate.id === worktree.repoId)
-      if (!repo || typeof inputs.setGitStatus !== 'function') {
+      // Why: the type says these exist, but a partial store mock can still hand
+      // back undefined -- this guards the mock, not a hole in the typing.
+      if (!repo || typeof inputs.deps.setGitStatus !== 'function') {
         return
       }
       const connectionId = getConnectionId(worktree.id) ?? undefined
@@ -120,25 +118,17 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
         await refreshGitStatusForWorktree({
           // Why: status belongs to the repo OWNER host, not whichever runtime the
           // sidebar happens to be focused on.
-          settings: getRepoOwnerRoutedSettings(
-            inputs.settings as Parameters<typeof getRepoOwnerRoutedSettings>[0],
-            {
-              id: repo.id,
-              connectionId: repo.connectionId ?? null,
-              executionHostId: repo.executionHostId ?? null
-            }
-          ),
+          settings: getRepoOwnerRoutedSettings(inputs.settings, {
+            id: repo.id,
+            connectionId: repo.connectionId ?? null,
+            executionHostId: repo.executionHostId ?? null
+          }),
           worktreeId: worktree.id,
           worktreePath: worktree.path,
           ...(connectionId ? { connectionId } : {}),
           // pushTarget is deliberately omitted: reconciling an explicit publish
           // target spawns extra Git work the count does not need.
-          deps: {
-            setGitStatus: inputs.setGitStatus,
-            updateWorktreeGitIdentity: inputs.updateWorktreeGitIdentity,
-            setUpstreamStatus: inputs.setUpstreamStatus,
-            fetchUpstreamStatus: inputs.fetchUpstreamStatus
-          } as Parameters<typeof refreshGitStatusForWorktree>[0]['deps'],
+          deps: inputs.deps,
           request: {
             signal: controller.signal,
             shouldApply: () => !controller.signal.aborted

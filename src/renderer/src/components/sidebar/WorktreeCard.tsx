@@ -1192,6 +1192,16 @@ const WorktreeCard = React.memo(function WorktreeCard({
   // Why: a dirty workspace with no issue, review or port still needs the trailing
   // cluster rendered, or its count has nowhere to go.
   const hasTrailingRowContent = hasDetails || hasPorts || changeCount > 0
+  // Why: undefined, not an empty fragment — the hover's "nothing to show" guard
+  // tests this prop, and a truthy wrapper would defeat it. Each caller keeps its
+  // own ports condition, which is not the same across the three hovers.
+  const renderIndicatorDetails = (showPortsSection: boolean): React.ReactNode =>
+    changeCount > 0 || showPortsSection ? (
+      <>
+        <WorktreeCardChangeCountDetails worktreeId={worktree.id} />
+        {showPortsSection ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+      </>
+    ) : undefined
   const cacheStartedAt = usePromptCacheCountdownStartedAt(worktree.id, showAggregateCacheTimer)
   const cacheTtlMs = useAppStore((s) =>
     showAggregateCacheTimer ? (s.settings?.promptCacheTtlMs ?? 0) : 0
@@ -1287,12 +1297,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
             branchName={showBranchIdentityHover ? branch : undefined}
             workspaceTitle={worktree.displayName}
             identityOrder="branch-first"
-            indicatorDetails={
-              <>
-                <WorktreeCardChangeCountDetails worktreeId={worktree.id} />
-                {hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
-              </>
-            }
+            indicatorDetails={renderIndicatorDetails(hasPorts)}
             openDelay={100}
             // Why: compact mode also renders the plug/badge hover root; sharing one open-state made hovering the
             // plug force-open the wider title card and race it closed (#9304), so let this title hover own its state.
@@ -1363,12 +1368,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
         automationProvenance={metaAutomationProvenance}
         cliProvenance={metaCliProvenance}
         automationHostId={worktree.hostId}
-        indicatorDetails={
-          <>
-            <WorktreeCardChangeCountDetails worktreeId={worktree.id} />
-            {hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
-          </>
-        }
+        indicatorDetails={renderIndicatorDetails(hasPorts)}
         hoverControl={detailsHoverControl}
         onEditIssue={affiliateListMode ? undefined : handleEditIssue}
         onEditComment={affiliateListMode ? undefined : handleEditComment}
@@ -1856,12 +1856,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
         branchName={hoverBranchName}
         workspaceTitle={hoverWorkspaceTitle}
         workspaceTitleRenameDisabled={isDeleting || affiliateListMode}
-        indicatorDetails={
-          <>
-            <WorktreeCardChangeCountDetails worktreeId={worktree.id} />
-            {workspacePorts.length > 0 ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
-          </>
-        }
+        indicatorDetails={renderIndicatorDetails(workspacePorts.length > 0)}
         openDelay={100}
         hoverControl={detailsHoverControl}
         onRenameWorkspaceTitle={affiliateListMode ? undefined : handleRenameTitle}
