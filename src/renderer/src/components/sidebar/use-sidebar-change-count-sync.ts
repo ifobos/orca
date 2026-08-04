@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '@/store'
 import { getConnectionId } from '@/lib/connection-context'
-import { getRepoOwnerRoutedSettings } from '@/lib/repo-runtime-owner'
+import {
+  getExplicitRuntimeEnvironmentIdForWorktree,
+  type WorktreeRuntimeOwnerState
+} from '@/lib/worktree-runtime-owner'
 import { installWindowVisibilityInterval, isWindowVisible } from '@/lib/window-visibility-interval'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import type { Repo, Worktree } from '../../../../shared/types'
@@ -38,8 +41,8 @@ const EMPTY_WORKTREES_BY_REPO: Record<string, Worktree[]> = {}
 
 type PollInputs = {
   repos: readonly Repo[]
-  worktreesByRepo: Record<string, Worktree[] | undefined>
-  settings: Parameters<typeof getRepoOwnerRoutedSettings>[0]
+  worktreesByRepo: Record<string, Worktree[]>
+  settings: WorktreeRuntimeOwnerState['settings']
   deps: GitStatusRefreshDeps
 }
 
@@ -114,7 +117,7 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       const visibleIds = new Set(getVisibleWorktreeIds())
       const targets: Worktree[] = []
       for (const worktrees of Object.values(inputs.worktreesByRepo)) {
-        for (const worktree of worktrees ?? []) {
+        for (const worktree of worktrees) {
           // Folder workspaces have no Git status to summarize. The ACTIVE
           // workspace is deliberately kept: Source Control only polls it while
           // the right sidebar shows that tab, so skipping it here would leave the
@@ -139,13 +142,21 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       const connectionId = getConnectionId(worktree.id) ?? undefined
       try {
         await refreshGitStatusForWorktree({
-          // Why: status belongs to the repo OWNER host, not whichever runtime the
-          // sidebar happens to be focused on.
-          settings: getRepoOwnerRoutedSettings(inputs.settings, {
-            id: repo.id,
-            connectionId: repo.connectionId ?? null,
-            executionHostId: repo.executionHostId ?? null
-          }),
+          // Why the EXPLICIT owner of this workspace, not the repo's routed
+          // owner: the repo helper falls back to the globally focused runtime for
+          // a repo with no explicit host, which dispatches a local workspace's
+          // status to a runtime that does not know it (#6957). A background read
+          // wants "the host that owns this, or local" and nothing else.
+          settings: {
+            activeRuntimeEnvironmentId: getExplicitRuntimeEnvironmentIdForWorktree(
+              {
+                repos: inputs.repos,
+                settings: inputs.settings,
+                worktreesByRepo: inputs.worktreesByRepo
+              },
+              worktree.id
+            )
+          },
           worktreeId: worktree.id,
           worktreePath: worktree.path,
           ...(connectionId ? { connectionId } : {}),
@@ -260,6 +271,10 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
 
   useEffect(() => {
     if (!enabled) {
+      // Why reset rather than leave it: a stale marker makes the next enable look
+      // like an agent transition, so reopening the sidebar swept twice -- the
+      // mount sweep already covers whatever changed while it was closed.
+      lastSeenAgentEpochRef.current = null
       return
     }
     // Why: the mount sweep already covered the epoch we start on; only a change

@@ -56,10 +56,6 @@ vi.mock('./visible-worktrees', () => ({
     Object.values(storeState.worktreesByRepo).flatMap((list) => (list ?? []).map((wt) => wt.id))
 }))
 
-vi.mock('@/lib/repo-runtime-owner', () => ({
-  getRepoOwnerRoutedSettings: (settings: unknown, repo: unknown) => ({ routedFor: repo, settings })
-}))
-
 const { useSidebarChangeCountSync } = await import('./use-sidebar-change-count-sync')
 
 function makeRepo(id: string, overrides: Partial<Repo> = {}): Repo {
@@ -205,13 +201,31 @@ describe('useSidebarChangeCountSync', () => {
     expect(refreshGitStatusForWorktree).not.toHaveBeenCalled()
   })
 
-  it('routes each workspace through its own repo owner settings', async () => {
+  it('never routes a local workspace to the focused runtime', async () => {
+    // Why the real helper and no mock: routing by the repo's *routed* owner falls
+    // back to whatever runtime is focused, which dispatches a local workspace's
+    // status to a host that does not know it (#6957). A background read wants the
+    // explicit owner or local, nothing else.
+    storeState.settings = { activeRuntimeEnvironmentId: 'env-focused' }
+
     await mount()
 
     const routed = refreshGitStatusForWorktree.mock.calls.map(
-      (call) => (call[0] as { settings: { routedFor: { id: string } } }).settings.routedFor.id
+      (call) => call[0].settings.activeRuntimeEnvironmentId
     )
-    expect(routed.sort()).toEqual(['git-1', 'git-2'])
+    expect(routed).toEqual([null, null])
+  })
+
+  it('routes a workspace whose repo declares a runtime host to that runtime', async () => {
+    storeState.settings = { activeRuntimeEnvironmentId: 'env-focused' }
+    storeState.repos = [makeRepo('git-1', { executionHostId: 'runtime:env-owner' })]
+    storeState.worktreesByRepo = { 'git-1': [makeWorktree('git-1', '/repos/git-1')] }
+
+    await mount()
+
+    expect(refreshGitStatusForWorktree.mock.calls[0][0].settings).toEqual({
+      activeRuntimeEnvironmentId: 'env-owner'
+    })
   })
 
   it('passes the SSH connection id when the workspace has one', async () => {
@@ -532,5 +546,25 @@ describe('useSidebarChangeCountSync', () => {
 
     expect(setUpstreamStatus).not.toHaveBeenCalled()
     expect(fetchUpstreamStatus).not.toHaveBeenCalled()
+  })
+
+  it('does not sweep twice when the sidebar is reopened after an agent moved', async () => {
+    // Why: the epoch marker went stale while disabled, so the next enable read as
+    // an agent transition and added a sweep on top of the mount one.
+    await mount()
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    await rerender(false)
+    storeState = { ...storeState, agentStatusEpoch: 9 }
+    await rerender(false)
+    refreshGitStatusForWorktree.mockClear()
+
+    await rerender(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    // Only the mount sweep's two calls, not four.
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
   })
 })
