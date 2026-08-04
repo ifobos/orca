@@ -5103,7 +5103,8 @@
         },
         "WorktreeCardChangeCountBadge": {
           "oneUncommittedChange": "未コミットの変更 1 件",
-          "uncommittedChanges": "未コミットの変更 {{value0}} 件"
+          "uncommittedChanges": "未コミットの変更 {{value0}} 件",
+          "atLeastUncommittedChanges": "未コミットの変更 {{value0}} 件以上"
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "未コミットの変更",
@@ -5111,7 +5112,8 @@
           "unstaged": "未ステージ {{value0}} 件",
           "untracked": "未追跡 {{value0}} 件",
           "oneSubmodule": "サブモジュール 1 件",
-          "submodules": "サブモジュール {{value0}} 件"
+          "submodules": "サブモジュール {{value0}} 件",
+          "cappedNotice": "最初の {{value0}} 件の変更のみを集計しています。"
         }
       },
       "shared": {

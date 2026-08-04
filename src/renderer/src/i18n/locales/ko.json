@@ -5103,7 +5103,8 @@
         },
         "WorktreeCardChangeCountBadge": {
           "oneUncommittedChange": "커밋되지 않은 변경 사항 1개",
-          "uncommittedChanges": "커밋되지 않은 변경 사항 {{value0}}개"
+          "uncommittedChanges": "커밋되지 않은 변경 사항 {{value0}}개",
+          "atLeastUncommittedChanges": "커밋되지 않은 변경 사항 {{value0}}개 이상"
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "커밋되지 않은 변경 사항",
@@ -5111,7 +5112,8 @@
           "unstaged": "스테이징되지 않음 {{value0}}개",
           "untracked": "추적되지 않음 {{value0}}개",
           "oneSubmodule": "서브모듈 1개",
-          "submodules": "서브모듈 {{value0}}개"
+          "submodules": "서브모듈 {{value0}}개",
+          "cappedNotice": "처음 {{value0}}개의 변경 사항만 집계합니다."
         }
       },
       "shared": {

@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const storeState: { gitStatusByWorktree?: Record<string, unknown[]> } = {}
+const storeState: {
+  gitStatusByWorktree?: Record<string, unknown[]>
+  gitStatusHugeByWorktree?: Record<string, { limit: number }>
+} = {}
 
 vi.mock('@/store', () => ({
   useAppStore: (selector: (state: unknown) => unknown) => selector(storeState)
@@ -19,6 +22,11 @@ function render(worktreeId: string): string {
 }
 
 describe('WorktreeCardChangeCountBadge', () => {
+  beforeEach(() => {
+    delete storeState.gitStatusByWorktree
+    delete storeState.gitStatusHugeByWorktree
+  })
+
   it('renders nothing for a clean workspace', () => {
     storeState.gitStatusByWorktree = { 'repo::/clean': [] }
 
@@ -33,8 +41,6 @@ describe('WorktreeCardChangeCountBadge', () => {
 
   it('renders nothing when the status slice is absent', () => {
     // Why: sidebar rows render under partial store mocks that never populate it.
-    delete storeState.gitStatusByWorktree
-
     expect(render('repo::/unknown')).toBe('')
   })
 
@@ -46,6 +52,19 @@ describe('WorktreeCardChangeCountBadge', () => {
     expect(html).toContain('>1<')
     expect(html).toContain('1 uncommitted change')
     expect(html).not.toContain('uncommitted changes')
+  })
+
+  it('presents a capped count as a floor, not a total', () => {
+    // Why: git was stopped at the cap, so the real number is unknown. Showing a
+    // bare 1000 would contradict Source Control's own "too many changes" state.
+    storeState.gitStatusByWorktree = { 'repo::/huge': Array.from({ length: 1000 }, () => ({})) }
+    storeState.gitStatusHugeByWorktree = { 'repo::/huge': { limit: 1000 } }
+
+    const html = render('repo::/huge')
+
+    expect(html).toContain('1000+')
+    expect(html).toContain('At least 1000 uncommitted changes')
+    expect(html).not.toContain('>1000 uncommitted changes')
   })
 
   it('shows the count and a plural label for several changes', () => {

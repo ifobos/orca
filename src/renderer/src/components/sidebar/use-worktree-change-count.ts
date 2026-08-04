@@ -10,3 +10,13 @@ export function useWorktreeChangeCount(worktreeId: string): number {
   // including under partial store mocks that never populate git status.
   return useAppStore((s) => s.gitStatusByWorktree?.[worktreeId]?.length ?? 0)
 }
+
+/**
+ * True when `git status` was capped for this workspace, so the count is a floor
+ * rather than a total. Source Control shows its own "too many changes" state for
+ * the same condition; without this the row would contradict it by presenting the
+ * cap as an exact number.
+ */
+export function useWorktreeChangeCountIsCapped(worktreeId: string): boolean {
+  return useAppStore((s) => s.gitStatusHugeByWorktree?.[worktreeId] !== undefined)
+}

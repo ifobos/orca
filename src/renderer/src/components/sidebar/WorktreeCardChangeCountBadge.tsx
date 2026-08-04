@@ -3,7 +3,7 @@ import { FileDiff } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translate } from '@/i18n/i18n'
 import { cn } from '@/lib/utils'
-import { useWorktreeChangeCount } from './use-worktree-change-count'
+import { useWorktreeChangeCount, useWorktreeChangeCountIsCapped } from './use-worktree-change-count'
 
 /**
  * Uncommitted-change count for a sidebar row. Renders nothing at zero, so a
@@ -18,11 +18,19 @@ export function WorktreeCardChangeCountBadge({
   className?: string
 }): React.JSX.Element | null {
   const changeCount = useWorktreeChangeCount(worktreeId)
+  const isCapped = useWorktreeChangeCountIsCapped(worktreeId)
   if (changeCount === 0) {
     return null
   }
-  const label =
-    changeCount === 1
+  const label = isCapped
+    ? // Why a floor rather than a total: git was stopped at the cap, so the real
+      // number is unknown. Source Control says the same thing in its own words.
+      translate(
+        'auto.components.sidebar.WorktreeCardChangeCountBadge.atLeastUncommittedChanges',
+        'At least {{value0}} uncommitted changes',
+        { value0: changeCount }
+      )
+    : changeCount === 1
       ? translate(
           'auto.components.sidebar.WorktreeCardChangeCountBadge.oneUncommittedChange',
           '1 uncommitted change'
@@ -46,7 +54,7 @@ export function WorktreeCardChangeCountBadge({
           )}
         >
           <FileDiff className="size-3.5" aria-hidden="true" />
-          <span>{changeCount}</span>
+          <span>{isCapped ? `${changeCount}+` : changeCount}</span>
           <span className="sr-only">{label}</span>
         </span>
       </TooltipTrigger>

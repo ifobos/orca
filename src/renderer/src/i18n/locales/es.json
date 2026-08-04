@@ -5103,7 +5103,8 @@
         },
         "WorktreeCardChangeCountBadge": {
           "oneUncommittedChange": "1 cambio sin confirmar",
-          "uncommittedChanges": "{{value0}} cambios sin confirmar"
+          "uncommittedChanges": "{{value0}} cambios sin confirmar",
+          "atLeastUncommittedChanges": "Al menos {{value0}} cambios sin confirmar"
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "Cambios sin confirmar",
@@ -5111,7 +5112,8 @@
           "unstaged": "{{value0}} sin preparar",
           "untracked": "{{value0}} sin seguimiento",
           "oneSubmodule": "1 submódulo",
-          "submodules": "{{value0}} submódulos"
+          "submodules": "{{value0}} submódulos",
+          "cappedNotice": "Solo se cuentan los primeros {{value0}} cambios."
         }
       },
       "shared": {

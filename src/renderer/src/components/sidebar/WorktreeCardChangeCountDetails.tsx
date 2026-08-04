@@ -8,6 +8,7 @@ import {
 } from './WorktreeCardDetailSection'
 import { summarizeWorktreeChanges } from './worktree-change-summary'
 import { useAppStore } from '@/store'
+import { useWorktreeChangeCountIsCapped } from './use-worktree-change-count'
 
 function buildBreakdown(entries: readonly GitStatusEntry[]): string[] {
   const summary = summarizeWorktreeChanges(entries)
@@ -72,6 +73,7 @@ export function WorktreeCardChangeCountDetails({
   const entries = useAppStore(
     (s) => s.gitStatusByWorktree?.[worktreeId] as GitStatusEntry[] | undefined
   )
+  const isCapped = useWorktreeChangeCountIsCapped(worktreeId)
   if (!entries || entries.length === 0) {
     return null
   }
@@ -87,12 +89,23 @@ export function WorktreeCardChangeCountDetails({
             'Uncommitted Changes'
           )}{' '}
           <span className="font-normal tabular-nums text-muted-foreground/70">
-            ({entries.length})
+            ({isCapped ? `${entries.length}+` : entries.length})
           </span>
         </span>
       </div>
       <WorktreeCardDetailSectionContent>
         <p className="text-[11.5px] leading-snug text-muted-foreground">{breakdown.join(' · ')}</p>
+        {isCapped ? (
+          // Why: without this the breakdown reads as a complete account of a
+          // truncated list, contradicting Source Control's own capped state.
+          <p className="text-[11.5px] leading-snug text-muted-foreground/70">
+            {translate(
+              'auto.components.sidebar.WorktreeCardChangeCountDetails.cappedNotice',
+              'Only the first {{value0}} changes are counted.',
+              { value0: entries.length }
+            )}
+          </p>
+        ) : null}
       </WorktreeCardDetailSectionContent>
     </WorktreeCardDetailSection>
   )

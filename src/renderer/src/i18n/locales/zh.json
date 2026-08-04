@@ -5115,7 +5115,8 @@
         },
         "WorktreeCardChangeCountBadge": {
           "oneUncommittedChange": "1 个未提交的更改",
-          "uncommittedChanges": "{{value0}} 个未提交的更改"
+          "uncommittedChanges": "{{value0}} 个未提交的更改",
+          "atLeastUncommittedChanges": "至少 {{value0}} 个未提交的更改"
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "未提交的更改",
@@ -5123,7 +5124,8 @@
           "unstaged": "未暂存 {{value0}} 个",
           "untracked": "未跟踪 {{value0}} 个",
           "oneSubmodule": "1 个子模块",
-          "submodules": "{{value0}} 个子模块"
+          "submodules": "{{value0}} 个子模块",
+          "cappedNotice": "仅统计前 {{value0}} 个更改。"
         }
       },
       "shared": {

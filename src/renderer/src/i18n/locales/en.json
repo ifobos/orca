@@ -5293,7 +5293,8 @@
         },
         "WorktreeCardChangeCountBadge": {
           "oneUncommittedChange": "1 uncommitted change",
-          "uncommittedChanges": "{{value0}} uncommitted changes"
+          "uncommittedChanges": "{{value0}} uncommitted changes",
+          "atLeastUncommittedChanges": "At least {{value0}} uncommitted changes"
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "Uncommitted Changes",
@@ -5301,7 +5302,8 @@
           "unstaged": "{{value0}} unstaged",
           "untracked": "{{value0}} untracked",
           "oneSubmodule": "1 submodule",
-          "submodules": "{{value0}} submodules"
+          "submodules": "{{value0}} submodules",
+          "cappedNotice": "Only the first {{value0}} changes are counted."
         }
       },
       "shared": {
