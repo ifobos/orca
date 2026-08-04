@@ -84,6 +84,7 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     }
     const controller = new AbortController()
     let sweepInFlight = false
+    let sweepRequestedWhileRunning = false
 
     const collectTargets = (): Worktree[] => {
       const inputs = inputsRef.current
@@ -93,11 +94,13 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       const targets: Worktree[] = []
       for (const worktrees of Object.values(inputs.worktreesByRepo)) {
         for (const worktree of worktrees ?? []) {
-          // Folder workspaces have no Git status to summarize. The active
-          // workspace is deliberately NOT skipped: Source Control only polls it
-          // while the right sidebar shows that tab, so skipping it here leaves
-          // the selected row -- the one most likely being looked at -- blank.
-          if (!gitRepoIds.has(worktree.repoId)) {
+          // Folder workspaces have no Git status to summarize, and an archived
+          // workspace has no row to show a count on -- visible-worktrees filters
+          // it out, so polling it would buy nothing forever. The ACTIVE workspace
+          // is deliberately kept: Source Control only polls it while the right
+          // sidebar shows that tab, so skipping it here would leave the selected
+          // row -- the one most likely being looked at -- blank.
+          if (!gitRepoIds.has(worktree.repoId) || worktree.isArchived) {
             continue
           }
           targets.push(worktree)
@@ -147,10 +150,15 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
     }
 
     const sweep = async (): Promise<void> => {
+      if (controller.signal.aborted) {
+        return
+      }
       // Why: a sweep slower than the interval must not stack another one on top
-      // and double every workspace's Git load. Window visibility is the
-      // interval's business, not this function's.
-      if (sweepInFlight || controller.signal.aborted) {
+      // and double every workspace's Git load -- but dropping the request would
+      // lose whatever prompted it until the next tick, so remember it instead.
+      // Window visibility is the interval's business, not this function's.
+      if (sweepInFlight) {
+        sweepRequestedWhileRunning = true
         return
       }
       sweepInFlight = true
@@ -168,15 +176,13 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       } finally {
         sweepInFlight = false
       }
+      if (sweepRequestedWhileRunning) {
+        sweepRequestedWhileRunning = false
+        // Why: go through the request path so the deferred run still respects the
+        // spacing floor instead of chaining straight into another sweep.
+        requestEventSweep()
+      }
     }
-
-    // Sweeps immediately, pauses while the window is hidden, and catches up as
-    // soon as it is visible again -- a hidden window drops signals, so the
-    // becoming-visible run is evidence-bearing rather than a bare tick.
-    const uninstallInterval = installWindowVisibilityInterval({
-      run: () => void sweep(),
-      intervalMs: SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS
-    })
 
     // Why: refresh every workspace rather than guessing which one an event
     // belongs to. An agent is not confined to its own worktree -- it can write
@@ -200,6 +206,14 @@ export function useSidebarChangeCountSync({ enabled }: { enabled: boolean }): vo
       }, delay)
     }
     requestEventSweepRef.current = requestEventSweep
+
+    // Sweeps immediately, pauses while the window is hidden, and catches up as
+    // soon as it is visible again -- a hidden window drops signals, so the
+    // becoming-visible run is evidence-bearing rather than a bare tick.
+    const uninstallInterval = installWindowVisibilityInterval({
+      run: () => void sweep(),
+      intervalMs: SIDEBAR_CHANGE_COUNT_POLL_INTERVAL_MS
+    })
 
     // Why: the app already watches the working tree of whatever the user has
     // open, and nothing consumed those events for Git status. Reusing them makes

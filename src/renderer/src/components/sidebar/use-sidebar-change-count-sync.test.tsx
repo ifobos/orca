@@ -63,7 +63,7 @@ function makeRepo(id: string, overrides: Partial<Repo> = {}): Repo {
   } as Repo
 }
 
-function makeWorktree(repoId: string, path: string): Worktree {
+function makeWorktree(repoId: string, path: string, overrides: Partial<Worktree> = {}): Worktree {
   return {
     id: `${repoId}::${path}`,
     repoId,
@@ -81,7 +81,8 @@ function makeWorktree(repoId: string, path: string): Worktree {
     isUnread: false,
     isPinned: false,
     sortOrder: 0,
-    lastActivityAt: 1
+    lastActivityAt: 1,
+    ...overrides
   } as Worktree
 }
 
@@ -435,5 +436,46 @@ describe('useSidebarChangeCountSync', () => {
     root = null
 
     expect(fsListeners).toHaveLength(0)
+  })
+
+  it('skips archived workspaces, which the sidebar does not render', async () => {
+    // Why: visible-worktrees filters archived workspaces out, so polling one buys
+    // a `git status` for a row that never appears.
+    storeState.worktreesByRepo = {
+      'git-1': [makeWorktree('git-1', '/repos/git-1')],
+      'git-2': [makeWorktree('git-2', '/repos/git-2', { isArchived: true })]
+    }
+
+    await mount()
+
+    expect(polledPaths()).toEqual(['/repos/git-1'])
+  })
+
+  it('defers a request that arrives mid-sweep instead of dropping it', async () => {
+    // Why: the in-flight guard used to return without remembering, so a change
+    // landing during a slow sweep waited for the next interval tick.
+    const releases: (() => void)[] = []
+    refreshGitStatusForWorktree.mockImplementation(
+      () => new Promise<void>((resolve) => releases.push(resolve))
+    )
+
+    await mount()
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    // An event lands while the mount sweep is still running.
+    await act(async () => {
+      emitFsChanged()
+      await vi.advanceTimersByTimeAsync(3_000)
+    })
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(2)
+
+    // Let the first sweep finish; the deferred request must still run.
+    refreshGitStatusForWorktree.mockResolvedValue(undefined)
+    await act(async () => {
+      releases.forEach((resolve) => resolve())
+      await vi.advanceTimersByTimeAsync(3_000)
+    })
+
+    expect(refreshGitStatusForWorktree).toHaveBeenCalledTimes(4)
   })
 })
