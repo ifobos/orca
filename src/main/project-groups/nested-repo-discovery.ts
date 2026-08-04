@@ -7,6 +7,8 @@ import type {
   NestedRepoScanOptions,
   NestedRepoScanResult
 } from '../../shared/types'
+import { isAgentScratchRepoRootPath } from '../../shared/agent-scratch-worktrees'
+import { hasImportableNestedRepo } from '../../shared/nested-repo-candidates'
 import { isGitRepo } from '../git/repo'
 
 type NestedRepoDirectoryEntry = {
@@ -316,7 +318,9 @@ export async function scanNestedRepos(args: {
   // "add this repo" path free of a review step that has nothing to review.
   const withSelectedRepoCandidate = (): NestedRepoScanResult => {
     const result = buildResult(selectedPathKind)
-    if (!selectedPathIsGitRepo || result.repos.length === 0) {
+    // Why importable and not merely present: a repo whose only nested repos are
+    // its own submodules is a plain repo, and must not be turned into a review.
+    if (!selectedPathIsGitRepo || !hasImportableNestedRepo(result.repos)) {
       return result
     }
     return {
@@ -422,6 +426,11 @@ export async function scanNestedRepos(args: {
       const childHasGitMarker = await filesystem.hasGitMarker(childPath)
       if (noteAbort()) {
         break
+      }
+      // Why excluded rather than listed: a repo minted by an agent CLI under one
+      // of these roots is agent-internal, not a user project (#9388).
+      if (childHasGitMarker && isAgentScratchRepoRootPath(childPath)) {
+        continue
       }
       if (childHasGitMarker) {
         repos.push({

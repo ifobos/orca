@@ -387,10 +387,54 @@ describe('scanNestedRepos', () => {
       filesystem: posixTestFilesystem({ directories, gitRepos, files })
     })
 
+    // Why no parent entry: a submodule is not an importable discovery, so a repo
+    // whose only nested repos are its own submodules stays a plain repo.
     expect(result.repos).toEqual([
-      { path: '/workspace', displayName: 'workspace', depth: 0 },
       { path: '/workspace/third-party/lib', displayName: 'lib', depth: 2, isSubmodule: true }
     ])
+  })
+
+  it('lists a submodule alongside a real nested clone without letting it stand alone', async () => {
+    const directories = new Map([
+      ['/workspace', ['.gitmodules', 'clone', 'design']],
+      ['/workspace/clone', []],
+      ['/workspace/design', []]
+    ])
+    const files = new Map([['/workspace/.gitmodules', '\tpath = design\n']])
+    const gitRepos = new Set(['/workspace', '/workspace/clone', '/workspace/design'])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos, files })
+    })
+
+    // The clone justifies the review, so the parent joins and the submodule is
+    // listed for the user to opt into.
+    expect(result.repos).toEqual([
+      { path: '/workspace', displayName: 'workspace', depth: 0 },
+      { path: '/workspace/clone', displayName: 'clone', depth: 1 },
+      { path: '/workspace/design', displayName: 'design', depth: 1, isSubmodule: true }
+    ])
+  })
+
+  it('excludes repos an agent CLI minted under its own scratch roots', async () => {
+    // Why: a repo registered at such a root is agent-internal, not a user
+    // project (#9388), and it would otherwise arrive pre-ticked for import.
+    const directories = new Map([
+      ['/workspace', ['.codex-tmp', 'api']],
+      ['/workspace/.codex-tmp', ['scratch']],
+      ['/workspace/api', []]
+    ])
+    const gitRepos = new Set(['/workspace', '/workspace/api', '/workspace/.codex-tmp/scratch'])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos })
+    })
+
+    expect(result.repos.map((repo) => repo.path)).toEqual(['/workspace', '/workspace/api'])
   })
 
   it('bounds a repos-inside-repos scan with a default timeout', async () => {

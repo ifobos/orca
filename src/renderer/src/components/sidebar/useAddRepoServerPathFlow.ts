@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { track } from '@/lib/telemetry'
 import { markOnboardingProjectAdded } from '@/lib/onboarding-project-checklist'
+import { hasImportableNestedRepo } from '../../../../shared/nested-repo-candidates'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import {
   buildNestedRepoScanTelemetry,
@@ -140,7 +141,7 @@ export function useAddRepoServerPathFlow({
               scan
             })
           )
-          if (scan && scan.repos.length > 0) {
+          if (scan && hasImportableNestedRepo(scan.repos, scan.selectedPath)) {
             showNestedRepoReview({
               scan,
               selectedPath: path,

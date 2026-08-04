@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { track } from '@/lib/telemetry'
+import { hasImportableNestedRepo } from '../../../../shared/nested-repo-candidates'
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import {
   buildNestedRepoScanTelemetry,
@@ -150,7 +151,7 @@ export function useAddRepoLocalFolderFlow({
         }
         // Why: a git parent reaches here with candidates only when it actually
         // contains nested repos, so a plain repo still skips the review entirely.
-        if (scan && scan.repos.length > 0) {
+        if (scan && hasImportableNestedRepo(scan.repos, path)) {
           // Why: a single-folder decision point cannot queue competing batch review states.
           showNestedRepoReview({
             scan,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { hasImportableNestedRepo } from '../../../../shared/nested-repo-candidates'
 import type { NestedRepoScanResult } from '../../../../shared/types'
 import type { SshTarget, SshConnectionState } from '../../../../shared/ssh-types'
 import { createNestedRepoTelemetryAttemptId } from '../../../../shared/nested-repo-telemetry'
@@ -177,7 +178,7 @@ export function useRemoteRepo(
         return
       }
       onNestedScanResult?.(scan ?? null, attemptId)
-      if (scan && scan.repos.length > 0) {
+      if (scan && hasImportableNestedRepo(scan.repos, scan.selectedPath)) {
         showNestedRepoReview?.(scan, trimmedRemotePath, selectedTargetId, attemptId, false, scanId)
         setRemoteNestedScanId(null)
         return
