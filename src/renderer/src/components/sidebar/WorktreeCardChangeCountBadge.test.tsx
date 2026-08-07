@@ -75,4 +75,18 @@ describe('WorktreeCardChangeCountBadge', () => {
     expect(html).toContain('>3<')
     expect(html).toContain('3 uncommitted changes')
   })
+
+  it('carries no tooltip of its own', () => {
+    // Why: every card style wraps this row in the details hover, whose
+    // "Uncommitted Changes" section states the same total and breaks it down. A
+    // tooltip here opens on top of that section and covers its heading -- seen in
+    // the running app, not in a unit test. Radix marks its trigger with
+    // data-state, so its absence is what proves the badge is a plain span.
+    storeState.gitStatusByWorktree = { 'repo::/dirty': [{}, {}, {}] }
+
+    const html = render('repo::/dirty')
+
+    expect(html).not.toContain('data-state=')
+    expect(html.match(/3 uncommitted changes/g)).toHaveLength(1)
+  })
 })
