@@ -9,19 +9,7 @@ import { safeFind } from '../terminal-search-safe-find'
 import { resolveTerminalShortcutAction } from './terminal-shortcut-policy'
 import type { MacOptionAsAlt } from './terminal-shortcut-policy'
 import { createTerminalNativeOnlyShortcutTracker } from './terminal-native-only-shortcut'
-import {
-  createTerminalImeDeferredNewlineSender,
-  createTerminalImeModifiedEnterChordOwner,
-  getTerminalImeModifiedEnterKind,
-  isTerminalImeConsumedKey,
-  isTerminalImeEnterKeyUp,
-  isTerminalImeProcessEnter
-} from './terminal-ime-deferred-newline'
-import { hasPendingTerminalImeComposition } from './terminal-ime-composition-route'
-import {
-  requestCapturedTerminalReconfirmation,
-  sendCapturedTerminalInput
-} from './terminal-captured-input-dispatch'
+import { installTerminalNativeInputListeners } from './terminal-native-input-listeners'
 import {
   keybindingMatchesAction,
   type KeybindingOverrides,
@@ -35,6 +23,7 @@ import {
   getLayoutBaseCharacterForCode,
   prefetchLayoutBaseCharacters
 } from '@/lib/keyboard-layout/layout-base-character'
+import { prefetchKoreanInputSource } from '@/lib/keyboard-layout/korean-input-source'
 import { normalizeSelectedTextForFileSearch } from '@/lib/file-search-selection'
 import { isFindQueryTooLarge } from '@/lib/find-query-bounds'
 import { handleEmptyFloatingWorkspacePanelCloseShortcut } from '@/lib/floating-workspace-terminal-actions'
@@ -47,6 +36,8 @@ import { isLocalWindowsConptyPaneForCtrlArrow } from './terminal-ctrl-arrow-conp
 import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { resolveWindowsShiftEnterEncodingForPane } from './terminal-windows-shift-enter'
 import { resolveTerminalInputHostPlatform } from './terminal-input-host-platform'
+import { isImeOwnedKeyboardEvent } from '@/lib/ime-composition-keyboard-event'
+import { isLatinShortcutKey } from '@/lib/ime-latin-shortcut-key'
 import {
   markTerminalFollowOutput,
   markTerminalPinnedViewport,
@@ -67,6 +58,9 @@ export function resolveTerminalKeyboardShortcutAction(
   isWindowsTerminalHost: NonNullable<Parameters<typeof resolveTerminalShortcutAction>[10]>,
   terminalShortcutPolicy: Parameters<typeof resolveTerminalShortcutAction>[11] = 'orca-first'
 ): ReturnType<typeof resolveTerminalShortcutAction> {
+  if (isImeOwnedKeyboardEvent(event)) {
+    return null
+  }
   // Why: keep the host callback required at the production boundary so a
   // caller cannot silently fall back to client-OS byte routing.
   return resolveTerminalShortcutAction(
@@ -94,9 +88,6 @@ export function recordKeyboardCreatedTerminalPaneSplit(
 ): boolean {
   return recordCreatedTerminalPaneSplit(createdPane, args)
 }
-
-// Bounds evidence when Chromium drops a matching keyup.
-const MAX_OBSERVED_ENTER_KEYDOWNS_PER_CODE = 8
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -146,7 +137,7 @@ export function matchSearchNavigate(
   if (!mod) {
     return null
   }
-  if (e.key.toLowerCase() !== 'g') {
+  if (!isLatinShortcutKey(e, 'g')) {
     return null
   }
   if (!searchOpen) {
@@ -206,6 +197,8 @@ type KeyboardHandlersDeps = {
   paneCwdRef: React.RefObject<PaneCwdMap>
   /** Worktree-root cwd used when OSC 7 and pty.getCwd both fail. */
   fallbackCwd: string
+  /** Gates the Korean input-source probe; its refresh spawns four processes. */
+  koreanWonToBackquoteEnabled?: boolean
   expandedPaneIdRef: React.RefObject<number | null>
   setExpandedPane: (paneId: number | null) => void
   restoreExpandedLayout: () => void
@@ -241,6 +234,7 @@ export function useTerminalKeyboardShortcuts({
   panePtyBindingsRef,
   paneCwdRef,
   fallbackCwd,
+  koreanWonToBackquoteEnabled,
   expandedPaneIdRef,
   setExpandedPane,
   restoreExpandedLayout,
@@ -273,6 +267,12 @@ export function useTerminalKeyboardShortcuts({
     // KeyboardLayoutMap; prefetch so the map is cached before the first chord.
     if (isMac) {
       prefetchLayoutBaseCharacters()
+      // Why: the Korean Won rewrite gate reads the active input source ID through the async IPC.
+      // Gated on the setting because each refresh shells out to `defaults export | plutil | plutil`
+      // and the default is off, so an ungated prefetch costs every macOS user four processes.
+      if (koreanWonToBackquoteEnabled) {
+        prefetchKoreanInputSource()
+      }
     }
 
     // Why: KeyboardEvent.location on a character key (e.g. Period) always
@@ -280,67 +280,49 @@ export function useTerminalKeyboardShortcuts({
     // held. To distinguish left vs right Option, we record the Option key's
     // location from its own keydown event and clear it on keyup.
     let optionKeyLocation = 0
-    const heldImeEnterModifiers = new Set<'shift' | 'ctrl'>()
     const nativeOnlyShortcutTracker = createTerminalNativeOnlyShortcutTracker()
-    const deferredNewlineSender = createTerminalImeDeferredNewlineSender()
-    const modifiedEnterChordOwner = createTerminalImeModifiedEnterChordOwner()
-    const reconcileHeldImeEnterModifiers = (
-      event: KeyboardEvent,
-      preserveModifierLostRedispatch = false
-    ): void => {
-      if (heldImeEnterModifiers.size === 0) {
-        return
+    const disposeNativeInputListeners = installTerminalNativeInputListeners(
+      window,
+      nativeOnlyShortcutTracker,
+      (location) => {
+        optionKeyLocation = location
+      },
+      // Why: the pane has never dropped the tracked side on blur — an Option held
+      // across a focus round-trip still resolves left vs right.
+      { forgetOptionKeyLocationOnBlur: false }
+    )
+
+    // Why: this callback is installed once per active tab and invoked only for
+    // Windows Shift+Enter, keeping store work and allocations off ordinary keys.
+    const getActivePaneWindowsShiftEnterEncoding = () => {
+      const manager = managerRef.current
+      const activePane = manager?.getActivePane() ?? manager?.getPanes()[0]
+      if (!activePane) {
+        return 'alt-enter' as const
       }
-      for (const [kind, pressed] of [
-        ['shift', event.getModifierState('Shift')],
-        ['ctrl', event.getModifierState('Control')]
-      ] as const) {
-        const belongsToActiveChord =
-          preserveModifierLostRedispatch &&
-          modifiedEnterChordOwner.absorb({ kind, code: event.code, timeStamp: event.timeStamp })
-        if (!pressed && !belongsToActiveChord && heldImeEnterModifiers.delete(kind)) {
-          modifiedEnterChordOwner.release({ kind, code: event.code, timeStamp: event.timeStamp })
-        }
-      }
-    }
-    // Press evidence distinguishes swallowed keydowns from modifier rollover on keyup.
-    const observedEnterKeydownTimeStamps = new Map<string, number[]>()
-    const getHeldImeEnterModifier = () =>
-      heldImeEnterModifiers.size === 1
-        ? (heldImeEnterModifiers.values().next().value ?? null)
-        : null
-    const getImeEnterModifier = (event: KeyboardEvent) => {
-      const eventKind = getTerminalImeModifiedEnterKind(event)
-      if (eventKind || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) {
-        return eventKind
-      }
-      return getHeldImeEnterModifier()
-    }
-    const getModifiedEnterChord = (event: KeyboardEvent) => {
-      const kind = getImeEnterModifier(event)
-      return kind ? { kind, code: event.code, timeStamp: event.timeStamp } : null
-    }
-    const onModifierDown = (e: KeyboardEvent): void => {
-      reconcileHeldImeEnterModifiers(e, e.key === 'Enter' && e.keyCode === 13)
-      if (e.key === 'Alt') {
-        optionKeyLocation = e.location
-      }
-      if (isWindows && (e.key === 'Shift' || e.key === 'Control')) {
-        const manager = managerRef.current
-        const keyboardScope = keyboardScopeRef.current
-        const pane = manager?.getActivePane() ?? manager?.getPanes()[0]
-        if (
-          pane &&
-          (!keyboardScope || keyboardEventBelongsToScope(e, keyboardScope)) &&
-          !isEditableTarget(e.target)
-        ) {
-          heldImeEnterModifiers.add(e.key === 'Shift' ? 'shift' : 'ctrl')
-        }
-      }
+      const state = useAppStore.getState()
+      const paneKey = makePaneKey(tabId, activePane.leafId)
+      return resolveWindowsShiftEnterEncodingForPane(state, paneKey)
     }
 
-    // Why: foreground proof and Ctrl+Arrow translation are local ConPTY-only;
-    // resolve lazily so session/runtime lookups stay off ordinary keystrokes.
+    // Why: host metadata is live and can hydrate after the terminal mounts;
+    // resolve it only when Shift+Enter needs to choose a byte protocol.
+    const isActivePaneWindowsTerminalHost = (): boolean => {
+      const manager = managerRef.current
+      const activePane = manager?.getActivePane() ?? manager?.getPanes()[0]
+      return (
+        resolveTerminalInputHostPlatform({
+          clientPlatform: shortcutPlatform,
+          state: useAppStore.getState(),
+          worktreeId,
+          transport: activePane ? (paneTransportsRef.current.get(activePane.id) ?? null) : null
+        }) === 'win32'
+      )
+    }
+
+    // Why: the active pane's live PTY session decides whether Ctrl+Arrow should
+    // pass through as native \e[1;5C/\e[1;5D or be translated to \eb/\ef.
+    // Resolved lazily so session/runtime lookups stay off other keystrokes.
     const isLocalWindowsConptyPane = (): boolean => {
       const manager = managerRef.current
       const activePane = manager?.getActivePane() ?? manager?.getPanes()[0]
@@ -359,40 +341,6 @@ export function useTerminalKeyboardShortcuts({
         fallbackCwd,
         transport: paneTransportsRef.current.get(activePane.id) ?? null
       })
-    }
-
-    // Why: this callback is installed once per active tab and invoked only for
-    // Windows Shift+Enter, keeping store work and allocations off ordinary keys.
-    const getActivePaneWindowsShiftEnterEncoding = () => {
-      const manager = managerRef.current
-      const activePane = manager?.getActivePane() ?? manager?.getPanes()[0]
-      if (!activePane) {
-        return 'alt-enter' as const
-      }
-      const state = useAppStore.getState()
-      const paneKey = makePaneKey(tabId, activePane.leafId)
-      return resolveWindowsShiftEnterEncodingForPane(
-        state,
-        paneKey,
-        isLocalWindowsConptyPane()
-          ? state.runtimePaneTitlesByTabId[tabId]?.[activePane.id]
-          : undefined
-      )
-    }
-
-    // Why: host metadata is live and can hydrate after the terminal mounts;
-    // resolve it only when Shift+Enter needs to choose a byte protocol.
-    const isActivePaneWindowsTerminalHost = (): boolean => {
-      const manager = managerRef.current
-      const activePane = manager?.getActivePane() ?? manager?.getPanes()[0]
-      return (
-        resolveTerminalInputHostPlatform({
-          clientPlatform: shortcutPlatform,
-          state: useAppStore.getState(),
-          worktreeId,
-          transport: activePane ? (paneTransportsRef.current.get(activePane.id) ?? null) : null
-        }) === 'win32'
-      )
     }
 
     // Why: the pane's TUI opted into kitty keyboard reporting via CSI > u;
@@ -425,59 +373,7 @@ export function useTerminalKeyboardShortcuts({
         terminalShortcutPolicy
       )
 
-    const createCapturedInputSender = (
-      pane: { id: number; leafId: string },
-      data: string
-    ): (() => void) => {
-      const capturedTransport = paneTransportsRef.current.get(pane.id)
-      const capturedPtyId = capturedTransport?.getPtyId() ?? null
-      const capturedBinding = panePtyBindingsRef.current.get(pane.id) as
-        | (IDisposable & { requestWindowsShiftEnterReconfirmation?: () => void })
-        | undefined
-      const getCurrentManager = () => managerRef.current
-      const getCurrentTransport = () => paneTransportsRef.current.get(pane.id)
-      const getCurrentBinding = () => panePtyBindingsRef.current.get(pane.id)
-      return () => {
-        const targetPaneMounted =
-          getCurrentManager()
-            ?.getPanes()
-            .some((candidate) => candidate.id === pane.id && candidate.leafId === pane.leafId) ===
-          true
-        const sent = sendCapturedTerminalInput({
-          targetPaneMounted,
-          currentTransport: getCurrentTransport(),
-          capturedTransport,
-          capturedPtyId,
-          data
-        })
-        if (sent) {
-          recordTerminalUserInputForLeaf(tabId, pane.leafId)
-          if (data === '\x1b[13;2u') {
-            // Why: this write bypasses PTY onData, so no-OSC shells need reconfirmation.
-            requestCapturedTerminalReconfirmation(getCurrentBinding(), capturedBinding)
-          }
-        }
-      }
-    }
-
     const onKeyDown = (e: KeyboardEvent): void => {
-      // Why: replace stale state only for this physical key so rollover cannot
-      // disarm a still-held native-only chord before its Kitty keyup arrives.
-      nativeOnlyShortcutTracker.prepareKeyDown(e)
-      // Record before early returns so every observed Enter disqualifies keyup synthesis.
-      if (
-        isWindows &&
-        ((e.key === 'Enter' && e.keyCode === 13) ||
-          (e.keyCode === 229 && (e.code === 'Enter' || e.code === 'NumpadEnter')))
-      ) {
-        const observed = observedEnterKeydownTimeStamps.get(e.code)
-        if (!observed) {
-          observedEnterKeydownTimeStamps.set(e.code, [e.timeStamp])
-        } else if (!e.repeat && observed.length < MAX_OBSERVED_ENTER_KEYDOWNS_PER_CODE) {
-          // Auto-repeat shares one physical release.
-          observed.push(e.timeStamp)
-        }
-      }
       const manager = managerRef.current
       if (!manager) {
         return
@@ -486,37 +382,12 @@ export function useTerminalKeyboardShortcuts({
       if (keyboardScope && !keyboardEventBelongsToScope(e, keyboardScope)) {
         return
       }
-
-      const modifiedEnterChord = isWindows ? getModifiedEnterChord(e) : null
-      if (
-        e.key === 'Enter' &&
-        e.keyCode === 13 &&
-        !e.isComposing &&
-        ((modifiedEnterChord && modifiedEnterChordOwner.absorb(modifiedEnterChord)) ||
-          deferredNewlineSender.absorbRedispatchedEnter(e))
-      ) {
-        // Chromium can drop the modifier when re-dispatching the committing Enter.
-        reconcileHeldImeEnterModifiers(e)
-        e.preventDefault()
-        e.stopImmediatePropagation()
+      if (isImeOwnedKeyboardEvent(e)) {
         return
       }
-
-      const terminalPaneForImeShortcut = manager.getActivePane() ?? manager.getPanes()[0]
-      const hasPendingImeComposition = hasPendingTerminalImeComposition(
-        terminalPaneForImeShortcut?.terminal.element
-      )
-      const imeProcessEnter = isWindows && hasPendingImeComposition && isTerminalImeProcessEnter(e)
-      if (
-        isWindows &&
-        hasPendingImeComposition &&
-        !imeProcessEnter &&
-        isTerminalImeConsumedKey(e)
-      ) {
-        // Process has no logical key, so shortcut matching would fall back to its physical code.
-        e.stopImmediatePropagation()
-        return
-      }
+      // Why: replace stale state only for this physical key so rollover cannot
+      // disarm a still-held native-only chord before its Kitty keyup arrives.
+      nativeOnlyShortcutTracker.prepareKeyDown(e)
 
       if (matchFileSearchShortcut(e, shortcutPlatform, keybindings, terminalShortcutPolicy)) {
         const pane = manager.getActivePane() ?? manager.getPanes()[0]
@@ -557,18 +428,7 @@ export function useTerminalKeyboardShortcuts({
         return
       }
 
-      const shortcutEvent = imeProcessEnter
-        ? {
-            key: 'Enter',
-            code: e.code,
-            metaKey: e.metaKey,
-            ctrlKey: e.ctrlKey,
-            altKey: e.altKey,
-            shiftKey: e.shiftKey,
-            repeat: e.repeat
-          }
-        : e
-      const action = resolveShortcutEvent(shortcutEvent)
+      const action = resolveShortcutEvent(e)
       if (!action) {
         return
       }
@@ -588,18 +448,14 @@ export function useTerminalKeyboardShortcuts({
         if (!pane) {
           return
         }
-        const sendResolvedInput = createCapturedInputSender(pane, action.data)
-        if ((e.isComposing || hasPendingImeComposition) && (e.key === 'Enter' || imeProcessEnter)) {
-          if (isWindows) {
-            const chord = getModifiedEnterChord(e)
-            if (chord && !modifiedEnterChordOwner.claim(chord)) {
-              return
-            }
-          }
-          deferredNewlineSender.defer(e, pane.terminal.element, sendResolvedInput)
-          return
+        pane.terminal.input(action.data)
+        recordTerminalUserInputForLeaf(tabId, pane.leafId)
+        if (action.data === '\x1b[13;2u') {
+          const binding = panePtyBindingsRef.current.get(pane.id) as
+            | (IDisposable & { requestWindowsShiftEnterReconfirmation?: () => void })
+            | undefined
+          binding?.requestWindowsShiftEnterReconfirmation?.()
         }
-        sendResolvedInput()
         return
       }
 
@@ -792,135 +648,10 @@ export function useTerminalKeyboardShortcuts({
       }
     }
 
-    const onKeyUp = (e: KeyboardEvent): void => {
-      if (!isTerminalImeEnterKeyUp(e)) {
-        reconcileHeldImeEnterModifiers(e)
-      }
-      if (e.key === 'Alt') {
-        optionKeyLocation = 0
-      }
-      const releasedImeEnterModifier =
-        e.key === 'Shift' ? 'shift' : e.key === 'Control' ? 'ctrl' : null
-      if (releasedImeEnterModifier) {
-        const kind = releasedImeEnterModifier
-        heldImeEnterModifiers.delete(kind)
-        modifiedEnterChordOwner.release({ kind, code: e.code, timeStamp: e.timeStamp })
-      }
-      if (e.key !== 'Enter') {
-        return
-      }
-
-      const observedEnterKeydowns = observedEnterKeydownTimeStamps.get(e.code)
-      const enterKeydownWasObserved = observedEnterKeydowns !== undefined
-      if (enterKeydownWasObserved && !observedEnterKeydowns.includes(e.timeStamp)) {
-        // A balancing keyup copies its keydown timestamp; only the physical release drains it.
-        observedEnterKeydowns.shift()
-        if (observedEnterKeydowns.length === 0) {
-          observedEnterKeydownTimeStamps.delete(e.code)
-        }
-      }
-      const modifiedEnterKind = getImeEnterModifier(e)
-      if (isWindows && modifiedEnterKind && isTerminalImeEnterKeyUp(e)) {
-        const chord = { kind: modifiedEnterKind, code: e.code, timeStamp: e.timeStamp }
-        if (modifiedEnterChordOwner.absorb(chord)) {
-          modifiedEnterChordOwner.release(chord)
-          e.preventDefault()
-          e.stopImmediatePropagation()
-          deferredNewlineSender.releaseRedispatchedEnter(e)
-          return
-        }
-
-        const manager = managerRef.current
-        const keyboardScope = keyboardScopeRef.current
-        if (
-          // An observed keydown makes this modifier state rollover, not a swallowed chord.
-          !enterKeydownWasObserved &&
-          manager &&
-          !isEditableTarget(e.target) &&
-          (!keyboardScope || keyboardEventBelongsToScope(e, keyboardScope))
-        ) {
-          const pane = manager.getActivePane() ?? manager.getPanes()[0]
-          if (pane && hasPendingTerminalImeComposition(pane.terminal.element)) {
-            const action = resolveShortcutEvent({
-              key: 'Enter',
-              code: e.code,
-              metaKey: false,
-              ctrlKey: modifiedEnterKind === 'ctrl',
-              altKey: false,
-              shiftKey: modifiedEnterKind === 'shift',
-              repeat: false
-            })
-            if (action?.type === 'sendInput') {
-              e.preventDefault()
-              e.stopImmediatePropagation()
-              deferredNewlineSender.defer(
-                e,
-                pane.terminal.element,
-                createCapturedInputSender(pane, action.data)
-              )
-              return
-            }
-          }
-        }
-      }
-
-      if (modifiedEnterKind) {
-        modifiedEnterChordOwner.release({
-          kind: modifiedEnterKind,
-          code: e.code,
-          timeStamp: e.timeStamp
-        })
-      }
-      deferredNewlineSender.releaseRedispatchedEnter(e)
-    }
-
-    const onNativeOnlyShortcutCompanion = (e: KeyboardEvent): void => {
-      if (nativeOnlyShortcutTracker.consumeCompanion(e)) {
-        // Why: canceling only the companion keypress prevents Chromium's text
-        // insertion without canceling the keydown default used by the OS switch.
-        if (e.type === 'keypress') {
-          e.preventDefault()
-        }
-        e.stopImmediatePropagation()
-      }
-    }
-
-    // Why: modern Chromium can skip keypress and insert via beforeinput; block
-    // only this chord's text so an IME commit in the same window remains intact.
-    const onNativeOnlyBeforeInput = (e: Event): void => {
-      if (!(e instanceof InputEvent) || !nativeOnlyShortcutTracker.shouldSuppressBeforeInput(e)) {
-        return
-      }
-      e.preventDefault()
-      e.stopImmediatePropagation()
-    }
-
-    const onNativeOnlyBlur = (): void => {
-      nativeOnlyShortcutTracker.clear()
-      heldImeEnterModifiers.clear()
-      modifiedEnterChordOwner.clear()
-      deferredNewlineSender.clearRedispatchedEnters()
-      observedEnterKeydownTimeStamps.clear()
-    }
-
-    window.addEventListener('keydown', onModifierDown, { capture: true })
-    window.addEventListener('keyup', onKeyUp, { capture: true })
     window.addEventListener('keydown', onKeyDown, { capture: true })
-    window.addEventListener('keypress', onNativeOnlyShortcutCompanion, { capture: true })
-    window.addEventListener('keyup', onNativeOnlyShortcutCompanion, { capture: true })
-    window.addEventListener('beforeinput', onNativeOnlyBeforeInput, { capture: true })
-    window.addEventListener('blur', onNativeOnlyBlur)
     return () => {
-      modifiedEnterChordOwner.clear()
-      deferredNewlineSender.clearRedispatchedEnters()
-      observedEnterKeydownTimeStamps.clear()
-      window.removeEventListener('keydown', onModifierDown, { capture: true })
-      window.removeEventListener('keyup', onKeyUp, { capture: true })
+      disposeNativeInputListeners()
       window.removeEventListener('keydown', onKeyDown, { capture: true })
-      window.removeEventListener('keypress', onNativeOnlyShortcutCompanion, { capture: true })
-      window.removeEventListener('keyup', onNativeOnlyShortcutCompanion, { capture: true })
-      window.removeEventListener('beforeinput', onNativeOnlyBeforeInput, { capture: true })
-      window.removeEventListener('blur', onNativeOnlyBlur)
     }
   }, [
     isActive,
@@ -930,6 +661,7 @@ export function useTerminalKeyboardShortcuts({
     panePtyBindingsRef,
     paneCwdRef,
     fallbackCwd,
+    koreanWonToBackquoteEnabled,
     expandedPaneIdRef,
     setExpandedPane,
     restoreExpandedLayout,

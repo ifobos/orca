@@ -49,6 +49,9 @@ import {
 } from './WorktreeCardMeta'
 import { getWorktreeCardJiraIssueDisplay } from './worktree-card-jira-issue-display'
 import { WorktreeCardPortsDetails, WorktreeCardPortsTrigger } from './WorktreeCardPorts'
+import { WorktreeCardChangeCountBadge } from './WorktreeCardChangeCountBadge'
+import { WorktreeCardChangeCountDetails } from './WorktreeCardChangeCountDetails'
+import { useWorktreeChangeCount } from './use-worktree-change-count'
 import { writeWorkspaceDragData } from './workspace-status'
 import {
   getWorktreeCardPrDisplay,
@@ -1183,6 +1186,22 @@ const WorktreeCard = React.memo(function WorktreeCard({
     cliProvenance: metaCliProvenance
   })
   const hasPorts = showPorts && workspacePorts.length > 0
+  // Why: the change count shares the row's trailing cluster instead of the
+  // leading status lane, which activity, review, branch and unread already share.
+  const changeCount = useWorktreeChangeCount(worktree.id)
+  // Why: a dirty workspace with no issue, review or port still needs the trailing
+  // cluster rendered, or its count has nowhere to go.
+  const hasTrailingRowContent = hasDetails || hasPorts || changeCount > 0
+  // Why: undefined, not an empty fragment — the hover's "nothing to show" guard
+  // tests this prop, and a truthy wrapper would defeat it. Each caller keeps its
+  // own ports condition, which is not the same across the three hovers.
+  const renderIndicatorDetails = (showPortsSection: boolean): React.ReactNode =>
+    changeCount > 0 || showPortsSection ? (
+      <>
+        <WorktreeCardChangeCountDetails worktreeId={worktree.id} />
+        {showPortsSection ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+      </>
+    ) : undefined
   const cacheStartedAt = usePromptCacheCountdownStartedAt(worktree.id, showAggregateCacheTimer)
   const cacheTtlMs = useAppStore((s) =>
     showAggregateCacheTimer ? (s.settings?.promptCacheTtlMs ?? 0) : 0
@@ -1210,8 +1229,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
   // Why: the slot owns the unread/status lane; legacy keeps the bell toggle, the new card keeps the glyph passive.
   const showCombinedStatusSlot = showStatus
   const showTitleRowPrimary = compactCards && worktree.isMainWorktree && !isFolder
-  const showMetaRowDetails = !newCardStyle && !compactCards && (hasDetails || hasPorts)
-  const showTitleRowIndicators = (newCardStyle || compactCards) && (hasDetails || hasPorts)
+  const showMetaRowDetails = !newCardStyle && !compactCards && hasTrailingRowContent
+  const showTitleRowIndicators = (newCardStyle || compactCards) && hasTrailingRowContent
   // Why: grouped views can hide the repo badge; don't reserve a blank metadata lane unless there's real content.
   const hasDetailedMetaRowContent = Boolean(
     (showRepoBadgeInMetaRow && repo) ||
@@ -1257,13 +1276,14 @@ const WorktreeCard = React.memo(function WorktreeCard({
       cliProvenance: metaCliProvenance
     }) ||
       workspacePorts.length > 0 ||
+      changeCount > 0 ||
       hasHoverIdentity)
   // Why: the parent row owns metadata hover; don't stack the title's truncation tooltip on the details popover.
   const titleWrapper = newCardStyle
     ? hasHoverDetails
       ? (title: React.ReactElement): React.ReactElement => title
       : undefined
-    : compactCards && (showBranchIdentityHover || hasDetails || hasPorts)
+    : compactCards && (showBranchIdentityHover || hasTrailingRowContent)
       ? (title: React.ReactElement): React.ReactElement => (
           <WorktreeCardDetailsHover
             issue={metaIssue}
@@ -1277,7 +1297,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
             branchName={showBranchIdentityHover ? branch : undefined}
             workspaceTitle={worktree.displayName}
             identityOrder="branch-first"
-            detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+            indicatorDetails={renderIndicatorDetails(hasPorts)}
             openDelay={100}
             // Why: compact mode also renders the plug/badge hover root; sharing one open-state made hovering the
             // plug force-open the wider title card and race it closed (#9304), so let this title hover own its state.
@@ -1317,26 +1337,28 @@ const WorktreeCard = React.memo(function WorktreeCard({
       ? getNewCardStyleParentContentMarginLeft(contentIndent)
       : 0
   const cardStyle = cardPaddingLeft ? { paddingLeft: cardPaddingLeft } : undefined
-  const detailsAndPortsContent =
-    hasDetails || hasPorts ? (
-      <div className="flex shrink-0 items-center gap-1">
-        {hasPorts && <WorktreeCardPortsTrigger ports={workspacePorts} />}
-        {hasDetails && (
-          <WorktreeCardMetaBadges
-            issue={metaIssue}
-            linearIssue={metaLinearIssue}
-            jiraIssue={metaJiraIssue}
-            review={newCardStyle ? null : metaReview}
-            comment={metaComment}
-            automationProvenance={metaAutomationProvenance}
-            cliProvenance={metaCliProvenance}
-            className="ml-0 pr-0"
-          />
-        )}
-      </div>
-    ) : null
+  const detailsAndPortsContent = hasTrailingRowContent ? (
+    <div className="flex shrink-0 items-center gap-1">
+      <WorktreeCardChangeCountBadge worktreeId={worktree.id} />
+      {hasPorts && <WorktreeCardPortsTrigger ports={workspacePorts} />}
+      {hasDetails && (
+        <WorktreeCardMetaBadges
+          issue={metaIssue}
+          linearIssue={metaLinearIssue}
+          jiraIssue={metaJiraIssue}
+          review={newCardStyle ? null : metaReview}
+          comment={metaComment}
+          automationProvenance={metaAutomationProvenance}
+          cliProvenance={metaCliProvenance}
+          className="ml-0 pr-0"
+        />
+      )}
+    </div>
+  ) : null
   const detailsAndPorts =
-    detailsAndPortsContent && !newCardStyle ? (
+    // Why: the hover now explains the change count too, so a row carrying only a
+    // count still has something to show.
+    detailsAndPortsContent && !newCardStyle && hasTrailingRowContent ? (
       <WorktreeCardDetailsHover
         issue={metaIssue}
         linearIssue={metaLinearIssue}
@@ -1346,7 +1368,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
         automationProvenance={metaAutomationProvenance}
         cliProvenance={metaCliProvenance}
         automationHostId={worktree.hostId}
-        detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+        indicatorDetails={renderIndicatorDetails(hasPorts)}
         hoverControl={detailsHoverControl}
         onEditIssue={affiliateListMode ? undefined : handleEditIssue}
         onEditComment={affiliateListMode ? undefined : handleEditComment}
@@ -1834,9 +1856,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
         branchName={hoverBranchName}
         workspaceTitle={hoverWorkspaceTitle}
         workspaceTitleRenameDisabled={isDeleting || affiliateListMode}
-        detailsAfter={
-          workspacePorts.length > 0 ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null
-        }
+        indicatorDetails={renderIndicatorDetails(workspacePorts.length > 0)}
         openDelay={100}
         hoverControl={detailsHoverControl}
         onRenameWorkspaceTitle={affiliateListMode ? undefined : handleRenameTitle}
