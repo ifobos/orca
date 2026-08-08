@@ -14,14 +14,17 @@ function buildBreakdown(entries: readonly GitStatusEntry[]): string[] {
   const summary = summarizeWorktreeChanges(entries)
   const parts: string[] = []
   if (summary.staged > 0) {
+    // Why a singular form for this one and not the others: "staged" translates to
+    // an adjective that agrees with number, so es renders "1 preparados" without
+    // it. "unstaged" and "untracked" resolve to invariant phrases.
     parts.push(
-      translate(
-        'auto.components.sidebar.WorktreeCardChangeCountDetails.staged',
-        '{{value0}} staged',
-        {
-          value0: summary.staged
-        }
-      )
+      summary.staged === 1
+        ? translate('auto.components.sidebar.WorktreeCardChangeCountDetails.oneStaged', '1 staged')
+        : translate(
+            'auto.components.sidebar.WorktreeCardChangeCountDetails.staged',
+            '{{value0}} staged',
+            { value0: summary.staged }
+          )
     )
   }
   if (summary.unstaged > 0) {

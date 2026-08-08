@@ -5120,6 +5120,7 @@
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "未提交的更改",
+          "oneStaged": "已暂存 1 个",
           "staged": "已暂存 {{value0}} 个",
           "unstaged": "未暂存 {{value0}} 个",
           "untracked": "未跟踪 {{value0}} 个",

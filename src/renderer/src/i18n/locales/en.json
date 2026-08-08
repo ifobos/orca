@@ -5298,6 +5298,7 @@
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "Uncommitted Changes",
+          "oneStaged": "1 staged",
           "staged": "{{value0}} staged",
           "unstaged": "{{value0}} unstaged",
           "untracked": "{{value0}} untracked",

@@ -166,6 +166,79 @@ describe('useAddRepoLocalFolderFlow', () => {
     )
   })
 
+  it('does not open the review from a partial scan holding nothing importable', async () => {
+    // Why: onProgress fires mid-scan, and a partial result can carry only the
+    // selected root or a submodule. Gating it on repos.length alone flashed the
+    // review open for a plain repo before the final result closed it again.
+    pickFolders.mockResolvedValue(['/projects/solo'])
+    scanNestedRepos.mockImplementationOnce(async (_path, _connectionId, controls) => {
+      const partial = makeScan('/projects/solo', {
+        repos: [
+          { path: '/projects/solo', displayName: 'solo', depth: 0 },
+          { path: '/projects/solo/vendored', displayName: 'vendored', depth: 1, isSubmodule: true }
+        ]
+      })
+      controls?.onProgress?.(partial)
+      return partial
+    })
+    const { useAddRepoLocalFolderFlow } = await import('./useAddRepoLocalFolderFlow')
+
+    const { handleBrowse } = useAddRepoLocalFolderFlow({
+      isOpen: true,
+      droppedLocalPath: '',
+      activeRuntimeEnvironmentId: null,
+      addRepoPath,
+      closeModal,
+      fetchWorktrees,
+      scanNestedRepos,
+      setActiveNestedScanId,
+      setNestedScanInProgress,
+      showNestedRepoReview,
+      onGitRepoReady,
+      setIsAdding,
+      setAddProjectBusyLabel
+    })
+
+    await handleBrowse()
+
+    expect(showNestedRepoReview).not.toHaveBeenCalled()
+    expect(addRepoPath).toHaveBeenCalledWith('/projects/solo', undefined, {
+      runtimeEnvironmentId: null
+    })
+  })
+
+  it('judges eligibility by the path the scan resolved, not the one passed in', async () => {
+    // Why: the picker can hand back /tmp where the scan resolves /private/tmp.
+    // Comparing against the input then leaves the selected root looking nested.
+    pickFolders.mockResolvedValue(['/tmp/solo'])
+    scanNestedRepos.mockResolvedValueOnce(
+      makeScan('/private/tmp/solo', {
+        repos: [{ path: '/private/tmp/solo', displayName: 'solo', depth: 0 }]
+      })
+    )
+    const { useAddRepoLocalFolderFlow } = await import('./useAddRepoLocalFolderFlow')
+
+    const { handleBrowse } = useAddRepoLocalFolderFlow({
+      isOpen: true,
+      droppedLocalPath: '',
+      activeRuntimeEnvironmentId: null,
+      addRepoPath,
+      closeModal,
+      fetchWorktrees,
+      scanNestedRepos,
+      setActiveNestedScanId,
+      setNestedScanInProgress,
+      showNestedRepoReview,
+      onGitRepoReady,
+      setIsAdding,
+      setAddProjectBusyLabel
+    })
+
+    await handleBrowse()
+
+    expect(showNestedRepoReview).not.toHaveBeenCalled()
+  })
+
   it('skips nested-review folders in a multi-folder add and continues with git folders', async () => {
     pickFolders.mockResolvedValue(['/projects/monorepo', '/projects/later'])
     scanNestedRepos.mockImplementationOnce(async (_path, _connectionId, controls) => {

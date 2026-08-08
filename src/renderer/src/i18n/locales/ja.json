@@ -5108,6 +5108,7 @@
         },
         "WorktreeCardChangeCountDetails": {
           "heading": "未コミットの変更",
+          "oneStaged": "ステージ済み 1 件",
           "staged": "ステージ済み {{value0}} 件",
           "unstaged": "未ステージ {{value0}} 件",
           "untracked": "未追跡 {{value0}} 件",

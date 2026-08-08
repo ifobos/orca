@@ -160,7 +160,9 @@ export function useRemoteRepo(
           if (
             gen !== remoteGenRef.current ||
             !mountedRef.current ||
-            progressScan.repos.length === 0
+            // Why the same gate as the final result: a partial scan can hold only
+            // the selected root or a submodule, neither of which is importable.
+            !hasImportableNestedRepo(progressScan.repos, progressScan.selectedPath)
           ) {
             return
           }

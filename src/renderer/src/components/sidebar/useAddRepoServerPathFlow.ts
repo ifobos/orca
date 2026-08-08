@@ -110,7 +110,12 @@ export function useAddRepoServerPathFlow({
               ? {
                   scanId,
                   onProgress: (progressScan: NestedRepoScanResult) => {
-                    if (gen !== serverAddGenRef.current || progressScan.repos.length === 0) {
+                    // Why the same gate as the final result: a partial scan can hold
+                    // only the selected root or a submodule, neither importable.
+                    if (
+                      gen !== serverAddGenRef.current ||
+                      !hasImportableNestedRepo(progressScan.repos, progressScan.selectedPath)
+                    ) {
                       return
                     }
                     showNestedRepoReview({
