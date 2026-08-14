@@ -378,7 +378,9 @@ describe('scanNestedRepos', () => {
       ['/workspace/third-party', ['lib']],
       ['/workspace/third-party/lib', []]
     ])
-    const files = new Map([['/workspace/.gitmodules', '\tpath = third-party/lib\n']])
+    const files = new Map([
+      ['/workspace/.gitmodules', '[submodule "lib"]\n\tpath = third-party/lib\n']
+    ])
     const gitRepos = new Set(['/workspace', '/workspace/third-party/lib'])
 
     const result = await scanNestedRepos({
@@ -400,7 +402,7 @@ describe('scanNestedRepos', () => {
       ['/workspace/clone', []],
       ['/workspace/design', []]
     ])
-    const files = new Map([['/workspace/.gitmodules', '\tpath = design\n']])
+    const files = new Map([['/workspace/.gitmodules', '[submodule "design"]\n\tpath = design\n']])
     const gitRepos = new Set(['/workspace', '/workspace/clone', '/workspace/design'])
 
     const result = await scanNestedRepos({
@@ -411,6 +413,36 @@ describe('scanNestedRepos', () => {
 
     // The clone justifies the review, so the parent joins and the submodule is
     // listed for the user to opt into.
+    expect(result.repos).toEqual([
+      { path: '/workspace', displayName: 'workspace', depth: 0 },
+      { path: '/workspace/clone', displayName: 'clone', depth: 1 },
+      { path: '/workspace/design', displayName: 'design', depth: 1, isSubmodule: true }
+    ])
+  })
+
+  it('reads path only inside a submodule section', async () => {
+    const directories = new Map([
+      ['/workspace', ['.gitmodules', 'clone', 'design']],
+      ['/workspace/clone', []],
+      ['/workspace/design', []]
+    ])
+    // Why: a `path` outside [submodule "…"], or one commented out, is not a
+    // submodule declaration — treating it as one would drop an independent repo
+    // from the default import selection.
+    const files = new Map([
+      [
+        '/workspace/.gitmodules',
+        '[core]\n\tpath = clone\n[submodule "design"]\n\t# path = stale\n\tpath = design\n'
+      ]
+    ])
+    const gitRepos = new Set(['/workspace', '/workspace/clone', '/workspace/design'])
+
+    const result = await scanNestedRepos({
+      path: '/workspace',
+      options: { includeReposInsideGitRepos: true },
+      filesystem: posixTestFilesystem({ directories, gitRepos, files })
+    })
+
     expect(result.repos).toEqual([
       { path: '/workspace', displayName: 'workspace', depth: 0 },
       { path: '/workspace/clone', displayName: 'clone', depth: 1 },
