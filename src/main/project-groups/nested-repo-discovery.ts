@@ -71,8 +71,8 @@ const SKIPPED_DIRS = new Set([
 
 const VCS_METADATA_DIRS = new Set(['.git', '.svn', '.hg', '.jj', '.sl', '.repo', 'CVS'])
 
-// Why: repos-inside-repos drops gitignore pruning, so it needs a wall clock of
-// its own — the local add path sends no timeout and would otherwise be unbounded.
+// Why: repos-inside-repos drops gitignore pruning and the local add path sends no
+// timeout, so without a wall clock of its own that scan is unbounded.
 const REPOS_INSIDE_REPOS_TIMEOUT_MS = 10_000
 
 function normalizeScanOptions(options: unknown): NormalizedNestedRepoScanOptions {
@@ -177,16 +177,39 @@ function matchesIgnoreRules(segments: string[], rules: IgnoreRule[]): boolean {
   return ignored
 }
 
+const GITMODULES_SECTION_PATTERN = /^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"[^"]*")?\s*\]/
+const GITMODULES_PATH_PATTERN = /^\s*path\s*=\s*(.+?)\s*$/
+
 function parseGitmodulesRules(content: string, baseSegments: string[]): SubmoduleRule[] {
-  return content
-    .split(/\r?\n/)
-    .map((line) => /^\s*path\s*=\s*(.+?)\s*$/.exec(line)?.[1])
-    .filter((value): value is string => value !== undefined)
-    .map((value) => ({
-      segments: value.replace(/\\/g, '/').split('/').filter(Boolean),
-      baseSegments
-    }))
-    .filter((rule) => rule.segments.length > 0)
+  const rules: SubmoduleRule[] = []
+  // Why scoped: `path` only declares a submodule under [submodule "…"]; accepted
+  // anywhere, a hand-edited [core] path drops an independent repo from the import.
+  let inSubmoduleSection = false
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (/^\s*[#;]/.test(rawLine)) {
+      continue
+    }
+    const section = GITMODULES_SECTION_PATTERN.exec(rawLine)
+    if (section) {
+      // Section names are case-insensitive in git config.
+      inSubmoduleSection = section[1].toLowerCase() === 'submodule'
+    }
+    if (!inSubmoduleSection) {
+      continue
+    }
+    // Git config allows the variable on the header's own line, so parse past it.
+    const value = GITMODULES_PATH_PATTERN.exec(
+      section ? rawLine.slice(section[0].length) : rawLine
+    )?.[1]
+    if (value === undefined) {
+      continue
+    }
+    const segments = value.replace(/\\/g, '/').split('/').filter(Boolean)
+    if (segments.length > 0) {
+      rules.push({ segments, baseSegments })
+    }
+  }
+  return rules
 }
 
 function isSubmodulePath(segments: string[], rules: SubmoduleRule[]): boolean {
@@ -312,10 +335,9 @@ export async function scanNestedRepos(args: {
   const selectedPathKind: NestedRepoScanResult['selectedPathKind'] = selectedPathIsGitRepo
     ? 'git_repo'
     : 'non_git_folder'
-  // Why: the selected repo is the one the caller explicitly picked, so it is
-  // never a discovery and never spends the maxRepos budget. It joins the
-  // candidate list only once a nested repo turns up, which keeps the plain
-  // "add this repo" path free of a review step that has nothing to review.
+  // Why: the picked repo is not a discovery, so it never spends the maxRepos
+  // budget and joins only once a nested repo turns up — otherwise the plain
+  // "add this repo" path would open a review with nothing to review.
   const withSelectedRepoCandidate = (): NestedRepoScanResult => {
     const result = buildResult(selectedPathKind)
     // Why importable and not merely present: a repo whose only nested repos are
@@ -373,9 +395,8 @@ export async function scanNestedRepos(args: {
     if (noteAbort()) {
       break
     }
-    // Why: a parent repo holds independent clones by gitignoring them, so for
-    // repos-inside-repos the ignore file points at the very repos being looked
-    // for. SKIPPED_DIRS, maxDepth, maxRepos and the timeout bound the cost.
+    // Why: a parent gitignores exactly the independent clones it holds, so here the
+    // ignore file hides the repos being looked for. The other bounds cap the cost.
     const currentIgnoreRules = options.includeReposInsideGitRepos
       ? []
       : [
@@ -441,9 +462,8 @@ export async function scanNestedRepos(args: {
           ...(isSubmodulePath(childSegments, currentSubmoduleRules) ? { isSubmodule: true } : {})
         })
         emitProgress()
-        // Project Groups organize sibling repos, so by default a discovered repo
-        // ends the branch. Callers that opted into repos-inside-repos keep
-        // descending: a repo nested in a repo is exactly what they asked for.
+        // Project Groups organize sibling repos, so a discovered repo ends the
+        // branch unless the caller asked for repos inside repos.
         if (!options.includeReposInsideGitRepos) {
           continue
         }
