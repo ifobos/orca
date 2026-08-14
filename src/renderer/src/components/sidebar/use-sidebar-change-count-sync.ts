@@ -7,7 +7,8 @@ import {
 } from '@/lib/worktree-runtime-owner'
 import { installWindowVisibilityInterval, isWindowVisible } from '@/lib/window-visibility-interval'
 import { isFolderRepo } from '../../../../shared/repo-kind'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo } from '../../../../shared/repo-types'
+import type { Worktree } from '../../../../shared/worktree/types'
 import {
   refreshGitStatusForWorktree,
   type GitStatusRefreshDeps

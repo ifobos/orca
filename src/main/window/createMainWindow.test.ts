@@ -157,6 +157,9 @@ describe('createMainWindow', () => {
       on: vi.fn((event, handler) => {
         windowHandlers[event] = handler
       }),
+      once: vi.fn((event, handler) => {
+        windowHandlers[event] = handler
+      }),
       setZoomLevel: vi.fn(),
       setBackgroundThrottling: vi.fn(),
       invalidate: vi.fn(),
@@ -697,6 +700,9 @@ describe('createMainWindow', () => {
     const windowHandlers: Record<string, (...args: any[]) => void> = {}
     const webContents = {
       on: vi.fn((event, handler) => {
+        windowHandlers[event] = handler
+      }),
+      once: vi.fn((event, handler) => {
         windowHandlers[event] = handler
       }),
       setZoomLevel: vi.fn(),
@@ -1362,7 +1368,7 @@ describe('createMainWindow', () => {
     expect(webContents.send).toHaveBeenCalledWith('ui:dictationKeyDown')
   })
 
-  it('leaves worktree palette shortcuts to the renderer', () => {
+  it('forwards ctrl/cmd+j to the worktree palette toggle event', () => {
     const windowHandlers: Record<string, (...args: any[]) => void> = {}
     const webContents = {
       on: vi.fn((event, handler) => {
@@ -1419,10 +1425,12 @@ describe('createMainWindow', () => {
     ]) {
       const preventDefault = vi.fn()
       windowHandlers['before-input-event']({ preventDefault } as never, input as never)
-      expect(preventDefault).not.toHaveBeenCalled()
+      expect(preventDefault).toHaveBeenCalledTimes(1)
     }
 
-    expect(webContents.send).not.toHaveBeenCalledWith('ui:toggleWorktreePalette')
+    expect(webContents.send).toHaveBeenCalledTimes(2)
+    expect(webContents.send).toHaveBeenNthCalledWith(1, 'ui:toggleWorktreePalette')
+    expect(webContents.send).toHaveBeenNthCalledWith(2, 'ui:toggleWorktreePalette')
   })
 
   it('suppresses auto-repeat quick-command menu toggles from before-input-event', () => {
@@ -1630,7 +1638,7 @@ describe('createMainWindow', () => {
     expect(webContents.send).toHaveBeenCalledWith('ui:openQuickOpen')
   })
 
-  it('leaves terminal-focused worktree palette capture to the renderer', () => {
+  it('notifies before Orca-first captures a risky terminal-focused shortcut', () => {
     const windowHandlers: Record<string, (...args: any[]) => void> = {}
     const webContents = {
       on: vi.fn((event, handler) => {
@@ -1688,12 +1696,11 @@ describe('createMainWindow', () => {
       } as never
     )
 
-    expect(preventDefault).not.toHaveBeenCalled()
-    expect(webContents.send).not.toHaveBeenCalledWith(
-      'ui:terminalShortcutCaptured',
-      expect.anything()
-    )
-    expect(webContents.send).not.toHaveBeenCalledWith('ui:toggleWorktreePalette')
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(webContents.send).toHaveBeenNthCalledWith(1, 'ui:terminalShortcutCaptured', {
+      actionId: 'worktree.palette'
+    })
+    expect(webContents.send).toHaveBeenNthCalledWith(2, 'ui:toggleWorktreePalette')
   })
 
   it('notifies before Orca-first captures a terminal-focused double-tap shortcut', () => {
@@ -3430,6 +3437,9 @@ describe('createMainWindow', () => {
       on: vi.fn((event, handler) => {
         windowHandlers[event] = handler
       }),
+      once: vi.fn((event, handler) => {
+        windowHandlers[event] = handler
+      }),
       setZoomLevel: vi.fn(),
       setBackgroundThrottling: vi.fn(),
       invalidate: vi.fn(),
@@ -3486,6 +3496,21 @@ describe('createMainWindow', () => {
     windowHandlers['ready-to-show']()
 
     expect(browserWindowInstance.maximize).toHaveBeenCalledTimes(1)
+    expect(browserWindowInstance.show).toHaveBeenCalledTimes(1)
+  })
+
+  it('can reveal the startup window after renderer load before ready-to-show', () => {
+    const { browserWindowInstance, windowHandlers } = createStartupRevealWindowFixture()
+
+    createMainWindow(null, { revealOnDidFinishLoad: true })
+    const revealAfterLoad = browserWindowInstance.webContents.on.mock.calls.find(
+      ([event]) => event === 'did-finish-load'
+    )?.[1]
+    expect(revealAfterLoad).toBeTypeOf('function')
+    revealAfterLoad?.()
+
+    expect(browserWindowInstance.show).toHaveBeenCalledTimes(1)
+    windowHandlers['ready-to-show']()
     expect(browserWindowInstance.show).toHaveBeenCalledTimes(1)
   })
 

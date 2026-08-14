@@ -38,11 +38,15 @@ describe('grok session option catalog', () => {
   })
 
   it('offers only effort values the shared option labels localize', () => {
-    const localized = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    const localized = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
     const effort = grokEffortOption()
     for (const choice of effort.kind.type === 'select' ? effort.kind.choices : []) {
       expect(localized).toContain(choice.value)
     }
+  })
+
+  it('gives unknown model ids the same effort menu launch reads from the seed', () => {
+    expect(GROK_SESSION_OPTION_CATALOG.unknownModelOptions?.map(({ id }) => id)).toEqual(['effort'])
   })
 
   it('treats a successful discovery as authoritative, unlike the other agents', () => {
@@ -86,6 +90,39 @@ describe('grok launch args', () => {
       args: ['-m', 'grok-build'],
       appliedValues: { model: 'grok-build' }
     })
+  })
+
+  it('carries a picked effort onto a discovered model the seed never listed', () => {
+    // Regression: launch reads options off the static seed, so a discovered id
+    // resolved to no options and dropped `--reasoning-effort` from the argv.
+    expect(resolveAgentSessionOptionLaunch('grok', { model: 'grok-build', effort: 'low' })).toEqual(
+      {
+        args: ['-m', 'grok-build', '--reasoning-effort', 'low'],
+        appliedValues: { model: 'grok-build', effort: 'low' }
+      }
+    )
+  })
+
+  it('drops an effort value the menu does not offer on an unseeded model', () => {
+    expect(
+      resolveAgentSessionOptionLaunch('grok', { model: 'grok-build', effort: 'none' })
+    ).toEqual({ args: ['-m', 'grok-build'], appliedValues: { model: 'grok-build' } })
+  })
+
+  it('honors a user effort flag over the picker on an unseeded model too', () => {
+    expect(
+      resolveAgentSessionOptionLaunch('grok', { model: 'grok-build', effort: 'low' }, [
+        '--reasoning-effort=high'
+      ]).appliedValues
+    ).toEqual({ model: 'grok-build' })
+  })
+
+  it('still adds no effort default for a model the seed does not carry', () => {
+    // An unseeded id has no verified menu, so only an explicit pick may reach argv.
+    expect(resolveAgentSessionOptionLaunch('grok', { model: 'grok-build' }).args).toEqual([
+      '-m',
+      'grok-build'
+    ])
   })
 
   it('spawns vanilla when no model was ever picked', () => {

@@ -6,7 +6,7 @@ import type {
   NestedRepoCandidate,
   NestedRepoScanOptions,
   NestedRepoScanResult
-} from '../../shared/types'
+} from '../../shared/project-group-types'
 import { isAgentScratchRepoRootPath } from '../../shared/agent-scratch-worktrees'
 import { hasImportableNestedRepo } from '../../shared/nested-repo-candidates'
 import { isGitRepo } from '../git/repo'

@@ -4,7 +4,6 @@ import { ChevronRight, Folder, ArrowUp, LoaderCircle, Home, Search } from 'lucid
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { getFileTypeIcon } from '@/lib/file-type-icons'
-import { isImeOwnedKeyboardEvent } from '@/lib/ime-composition-keyboard-event'
 import {
   decideEnterAction,
   decideEscAction,
@@ -21,7 +20,7 @@ import {
 import { driveBreadcrumbPath, splitBrowsePath } from './remote-file-browser-drive-paths'
 import { browseRuntimeServerDirectory } from '@/runtime/runtime-server-directory-browser'
 import { translate } from '@/i18n/i18n'
-import type { FilesystemPathFlavor } from '../../../../shared/types'
+import type { FilesystemPathFlavor } from '../../../../shared/filesystem-entry-types'
 
 type RemoteFileBrowserProps = (
   | { targetId: string; runtimeEnvironmentId?: never }
@@ -479,12 +478,6 @@ export function RemoteFileBrowser({
 
   const handleFilterKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      // Covers Escape/Backspace too: mid-composition those belong to the IME, so a composing
-      // Backspace must delete a jamo rather than climb to the parent. Oracle tier only — the
-      // confirm's unmarked redispatch can still navigate, which is reversible.
-      if (isImeOwnedKeyboardEvent(e)) {
-        return
-      }
       if (e.key === 'Enter') {
         if (preview) {
           // Path mode Enter.

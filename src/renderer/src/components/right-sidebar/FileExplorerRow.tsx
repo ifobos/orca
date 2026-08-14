@@ -1,6 +1,5 @@
 /* eslint-disable max-lines -- Why: the row owns dense file-tree rendering plus its context menu, drag target, and inline-input sibling contract. */
 import React, { useCallback, useRef } from 'react'
-import { useImeEnterGestureOwnership } from '@/lib/ime-composition-keyboard-event'
 import { basename } from '@/lib/path'
 import {
   ChevronRight,
@@ -44,7 +43,7 @@ import {
   WORKSPACE_FILE_PATH_MIME,
   WORKSPACE_FILE_PATHS_MIME
 } from '@/lib/workspace-file-drag'
-import type { GitFileStatus } from '../../../../shared/types'
+import type { GitFileStatus } from '../../../../shared/git-status-types'
 import { STATUS_LABELS } from './status-display'
 import { RENAME_HOTSPOT_ATTR } from './file-explorer-dir-toggle-timing'
 import type { TreeNode } from './file-explorer-types'
@@ -100,7 +99,6 @@ export function InlineInputRow({
   const inputRef = useRef<HTMLInputElement>(null)
   const blurTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   const submitted = useRef(false)
-  const imeEnter = useImeEnterGestureOwnership()
   // Grace period flag: when a menu (context or dropdown) closes, its focus
   // management can momentarily steal focus from this input before the user
   // has a chance to type. During the grace window we re-focus on blur instead
@@ -220,16 +218,7 @@ export function InlineInputRow({
         ref={setInputRef}
         className="flex-1 min-w-0 bg-transparent text-xs text-foreground outline-none border border-ring rounded-sm px-1"
         defaultValue={inlineInput.type === 'rename' ? inlineInput.existingName : ''}
-        onCompositionStart={() => imeEnter.setComposing(true)}
-        onCompositionEnd={() => imeEnter.setComposing(false)}
-        onKeyUp={imeEnter.onKeyUp}
         onKeyDown={(e) => {
-          // Why: this Enter creates or renames a file on disk. A conversion-confirm
-          // Enter — and the unmarked Enter/13 redispatched after compositionend —
-          // must not reach submit(), which is one-shot and cannot be undone.
-          if (imeEnter.ownsKeyDown(e)) {
-            return
-          }
           if (e.key === 'Enter') {
             e.preventDefault()
             submit(e.currentTarget.value)
@@ -247,7 +236,6 @@ export function InlineInputRow({
           // user leaving, so commit like Finder does rather than clinging to
           // the edit state — every row is itself a context-menu trigger, so
           // relatedTarget can't tell an ordinary row click from Radix cleanup.
-          imeEnter.reset()
           if (!focusSettled.current) {
             scheduleInputRefocus()
             return
@@ -279,6 +267,7 @@ type FileExplorerRowProps = {
   connectionId?: string | null
   runtimeDownloadContext?: RuntimeFileOperationArgs | null
   supportsFolderDownload?: boolean
+  canOpenInOrcaBrowser: boolean
   canCollapseFolderSubtree: boolean
   targetDir: string
   targetDepth: number
@@ -437,12 +426,16 @@ export async function copyFileToOsClipboard(
     'auto.components.right.sidebar.FileExplorerRow.b234ab25b4',
     'Could not copy the file to the clipboard'
   )
+  const stagingFailureMessage = translate(
+    'auto.components.right.sidebar.FileExplorerRow.clipboardStagingUnavailable',
+    "Could not copy the file because Orca's temporary storage is unavailable"
+  )
   try {
     const result = await window.api.ui.writeClipboardFile(
       connectionId ? { filePath: node.path, connectionId } : node.path
     )
     if (!result.ok) {
-      toast.error(failureMessage)
+      toast.error(result.reason === 'staging-unavailable' ? stagingFailureMessage : failureMessage)
     }
   } catch (error) {
     toast.error(extractIpcErrorMessage(error, failureMessage))
@@ -463,6 +456,7 @@ export function FileExplorerRow({
   connectionId,
   runtimeDownloadContext,
   supportsFolderDownload = false,
+  canOpenInOrcaBrowser,
   canCollapseFolderSubtree,
   targetDir,
   targetDepth,
@@ -772,7 +766,7 @@ export function FileExplorerRow({
             {translate('auto.components.right.sidebar.FileExplorerRow.1d8e182c32', 'View File')}
           </ContextMenuItem>
         )}
-        {!node.isDirectory && activeWorktreeId && (
+        {!node.isDirectory && activeWorktreeId && canOpenInOrcaBrowser && (
           <ContextMenuItem onSelect={handleOpenInOrcaBrowser}>
             <Globe />
             {translate(
