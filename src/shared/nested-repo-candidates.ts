@@ -1,4 +1,4 @@
-import type { NestedRepoCandidate } from './types'
+import type { NestedRepoCandidate } from './project-group-types'
 
 /**
  * A submodule is a candidate you may opt into, not one that justifies asking.

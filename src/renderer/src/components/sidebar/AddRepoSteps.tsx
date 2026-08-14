@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { hasImportableNestedRepo } from '../../../../shared/nested-repo-candidates'
-import type { NestedRepoScanResult } from '../../../../shared/types'
+import type { NestedRepoScanResult } from '../../../../shared/project-group-types'
 import type { SshTarget, SshConnectionState } from '../../../../shared/ssh-types'
 import { createNestedRepoTelemetryAttemptId } from '../../../../shared/nested-repo-telemetry'
 import { translate } from '@/i18n/i18n'
@@ -160,7 +160,9 @@ export function useRemoteRepo(
           if (
             gen !== remoteGenRef.current ||
             !mountedRef.current ||
-            progressScan.repos.length === 0
+            // Why the same gate as the final result: a partial scan can hold only
+            // the selected root or a submodule, neither of which is importable.
+            !hasImportableNestedRepo(progressScan.repos, progressScan.selectedPath)
           ) {
             return
           }

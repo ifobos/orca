@@ -10,7 +10,10 @@ import {
   type MutableRefObject
 } from 'react'
 import { toast } from 'sonner'
-import type { GlobalSettings, OrcaHooks, ProjectHostSetup, Repo } from '../../../../shared/types'
+import type { GlobalSettings } from '../../../../shared/global-settings-types'
+import type { OrcaHooks } from '../../../../shared/orca-yaml-hook-types'
+import type { ProjectHostSetup } from '../../../../shared/project-types'
+import type { Repo } from '../../../../shared/repo-types'
 import type { SpeechModelState } from '../../../../shared/speech-types'
 import type {
   SourceControlAiSettings,
@@ -1204,6 +1207,8 @@ function Settings(): React.JSX.Element {
         hasRepos={repos.length > 0}
         searchQuery={settingsSearchInputQuery}
         searchInputRef={searchInputRef}
+        // Why: deep-links open panes/modals that own focus; plain entry lands in search.
+        searchAutoFocus={settingsNavigationTarget == null}
         onBack={closeSettingsPageWithPromptGuard}
         onSearchChange={setSettingsSearchQuery}
         onSelectSection={scrollToSection}
@@ -1462,7 +1467,7 @@ function Settings(): React.JSX.Element {
                   )}
                   description={translate(
                     'auto.components.settings.Settings.cfa34f4465',
-                    'Branch naming, base refs, attribution, and Git AI Author.'
+                    'Branch naming, base refs, and Git AI Author.'
                   )}
                   searchEntries={getSectionSearchEntries('git')}
                   forceVisible={hasUnsavedSourceControlAiPromptChanges}

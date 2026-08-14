@@ -9,7 +9,8 @@ import {
   type NestedRepoTelemetryRuntimeKind
 } from '../../../../shared/nested-repo-telemetry'
 import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
-import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
+import type { NestedRepoScanResult } from '../../../../shared/project-group-types'
+import type { Repo } from '../../../../shared/repo-types'
 import type { WorktreeFetchOptions } from '@/store/slices/worktree-helpers'
 import { createNestedRepoScanId } from './add-repo-dialog-types'
 import { worktreeRefreshOptions } from './add-repo-runtime-owner'
@@ -110,7 +111,12 @@ export function useAddRepoServerPathFlow({
               ? {
                   scanId,
                   onProgress: (progressScan: NestedRepoScanResult) => {
-                    if (gen !== serverAddGenRef.current || progressScan.repos.length === 0) {
+                    // Why the same gate as the final result: a partial scan can hold
+                    // only the selected root or a submodule, neither importable.
+                    if (
+                      gen !== serverAddGenRef.current ||
+                      !hasImportableNestedRepo(progressScan.repos, progressScan.selectedPath)
+                    ) {
                       return
                     }
                     showNestedRepoReview({

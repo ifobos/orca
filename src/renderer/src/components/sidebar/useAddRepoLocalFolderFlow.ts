@@ -9,7 +9,8 @@ import {
   type NestedRepoTelemetryRuntimeKind
 } from '../../../../shared/nested-repo-telemetry'
 import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
-import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
+import type { NestedRepoScanResult } from '../../../../shared/project-group-types'
+import type { Repo } from '../../../../shared/repo-types'
 import type { WorktreeFetchOptions } from '@/store/slices/worktree-helpers'
 import type { RepoSlice } from '@/store/slices/repos'
 import { createNestedRepoScanId } from './add-repo-dialog-types'
@@ -117,7 +118,9 @@ export function useAddRepoLocalFolderFlow({
             if (
               gen !== localAddGenRef.current ||
               mode === 'batch' ||
-              progressScan.repos.length === 0
+              // Why the same gate as the final result: a partial scan can hold only
+              // the selected root or a submodule, neither of which is importable.
+              !hasImportableNestedRepo(progressScan.repos, progressScan.selectedPath)
             ) {
               return
             }
@@ -151,7 +154,10 @@ export function useAddRepoLocalFolderFlow({
         }
         // Why: a git parent reaches here with candidates only when it actually
         // contains nested repos, so a plain repo still skips the review entirely.
-        if (scan && hasImportableNestedRepo(scan.repos, path)) {
+        // Why the scan's own path, not the input: the scan resolves it, so a
+        // picker handing back /tmp against a resolved /private/tmp would leave
+        // the selected root looking like a nested discovery.
+        if (scan && hasImportableNestedRepo(scan.repos, scan.selectedPath)) {
           // Why: a single-folder decision point cannot queue competing batch review states.
           showNestedRepoReview({
             scan,

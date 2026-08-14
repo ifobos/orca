@@ -6,15 +6,13 @@ import {
   getDefaultUIState,
   getWorktreeCardModeProperties
 } from '../../../../shared/constants'
-import type {
-  GitHubWorkItem,
-  JiraIssue,
-  LinearIssue,
-  PersistedUIState,
-  Repo,
-  TerminalTab,
-  Worktree
-} from '../../../../shared/types'
+import type { GitHubWorkItem } from '../../../../shared/github/work-item-types'
+import type { JiraIssue } from '../../../../shared/jira-types'
+import type { LinearIssue } from '../../../../shared/linear/issue-types'
+import type { PersistedUIState } from '../../../../shared/persisted-ui-state-types'
+import type { Repo } from '../../../../shared/repo-types'
+import type { TerminalTab } from '../../../../shared/terminal-tab-types'
+import type { Worktree } from '../../../../shared/worktree/types'
 import type { GitLabWorkItem } from '../../../../shared/gitlab-types'
 import { createUISlice } from './ui'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
@@ -785,6 +783,26 @@ describe('createUISlice hydratePersistedUI', () => {
         ...makePersistedUI(),
         activeView: undefined as unknown as PersistedUIState['activeView']
       },
+      'startup'
+    )
+
+    expect(store.getState().activeView).toBe('terminal')
+  })
+
+  // Why: the Skills page was removed after being unreachable since #4535, so a
+  // profile written before then can still carry `activeView: 'skills'` on disk.
+  // Dropping it from TopLevelView is what demotes it — this pins that the removal
+  // is a migration and not a blank main surface on next launch.
+  it('demotes a persisted skills view to terminal now that the page is gone', () => {
+    const store = createUIStore()
+    // Why: the default is already 'terminal', so seed a different view first —
+    // otherwise this passes whether hydration demoted the value or never ran.
+    store.setState({ activeView: 'tasks' })
+
+    store.getState().hydratePersistedUI(
+      makePersistedUI({
+        activeView: 'skills' as unknown as PersistedUIState['activeView']
+      }),
       'startup'
     )
 
@@ -1665,21 +1683,6 @@ describe('createUISlice hydratePersistedUI', () => {
           githubItemsQuery: 42,
           linearPreset: 'completed',
           linearQuery: 'label:bug',
-          linearIssueView: {
-            viewMode: 'board',
-            groupBy: 'nonsense',
-            orderBy: 'updated',
-            displayProperties: ['updated', 'bogus', 'state'],
-            teamPropertyTouched: 'yes',
-            filtersByWorkspaceId: {
-              'workspace-1': {
-                stateIds: ['state-b', 'state-a'],
-                priorities: [2],
-                assignee: null,
-                labelIds: []
-              }
-            }
-          },
           jiraPreset: 'reported',
           jiraQuery: 99
         } as unknown as PersistedUIState['taskResumeState']
@@ -1690,64 +1693,25 @@ describe('createUISlice hydratePersistedUI', () => {
       githubMode: 'project',
       linearPreset: 'completed',
       linearQuery: 'label:bug',
-      linearIssueView: {
-        viewMode: 'board',
-        groupBy: 'none',
-        orderBy: 'updated',
-        displayProperties: ['state', 'updated'],
-        teamPropertyTouched: false,
-        filtersByWorkspaceId: {
-          'workspace-1': {
-            stateIds: ['state-a', 'state-b'],
-            priorities: [2],
-            assignee: null,
-            labelIds: []
-          }
-        }
-      },
       jiraPreset: 'reported'
     })
   })
 
-  it('drops a corrupt persisted Linear view without losing the rest of the resume state', () => {
+  // Why: the Linear issue view is device-local now. A host that still holds one from
+  // an older build must not reintroduce the key the strict ui.set schema rejects.
+  it('ignores a stale host-persisted Linear issue view during hydration', () => {
     const store = createUIStore()
 
     store.getState().hydratePersistedUI(
       makePersistedUI({
         taskResumeState: {
           linearQuery: 'label:bug',
-          linearIssueView: 'board'
+          linearIssueView: { viewMode: 'board', groupBy: 'assignee' }
         } as unknown as PersistedUIState['taskResumeState']
       })
     )
 
     expect(store.getState().taskResumeState).toEqual({ linearQuery: 'label:bug' })
-  })
-
-  it('drops a corrupt persisted Linear filter without losing the other workspace filters', () => {
-    const store = createUIStore()
-
-    store.getState().hydratePersistedUI(
-      makePersistedUI({
-        taskResumeState: {
-          linearIssueView: {
-            filtersByWorkspaceId: {
-              'workspace-1': { stateIds: 'not-an-array' },
-              'workspace-2': {
-                stateIds: [],
-                priorities: [1],
-                assignee: null,
-                labelIds: []
-              }
-            }
-          }
-        } as unknown as PersistedUIState['taskResumeState']
-      })
-    )
-
-    expect(store.getState().taskResumeState?.linearIssueView?.filtersByWorkspaceId).toEqual({
-      'workspace-2': { stateIds: [], priorities: [1], assignee: null, labelIds: [] }
-    })
   })
 
   it('restores acknowledgedAgentsByPaneKey from persisted UI state', () => {

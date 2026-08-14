@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hasImportableNestedRepo, isImportableNestedRepoCandidate } from './nested-repo-candidates'
-import type { NestedRepoCandidate } from './types'
+import type { NestedRepoCandidate } from './project-group-types'
 
 function candidate(
   path: string,
